@@ -11,8 +11,9 @@ Features
   (Anima, Illustrious, SDXL, FLUX.2 Klein, FLUX Krea, Ideogram, LTX, Wan,
   MiniMax H3...).
 - Sampling controls: temperature, top_p, top_k, repeat penalty, max tokens, seed.
-- Thinking control (auto / off / on) tuned for Qwen3.x; Gemma-safe, with a real
-  "no think" for DeepSeek-style servers (non-thinking alias + explicit flags).
+- Thinking control (auto / off / on, plus the low..xhigh reasoning-effort levels
+  Qwen3.8-Flash-Next added) tuned for Qwen3.x; Gemma-safe, with a real "no think"
+  for DeepSeek-style servers (non-thinking alias + explicit flags).
 - Custom "cut tag": everything up to AND including the tag is removed from the
   output (great for stripping a model's </think> reasoning block).
 - Optional conversation memory (multi-turn) with a reset toggle.
@@ -39,7 +40,110 @@ from .prompt_templates import TEMPLATE_ORDER, get_template
 # Only the text turns are kept (images are sent only for the current run).
 _HISTORY = {}
 
-THINKING_MODES = ["auto", "off (no thinking)", "on (force thinking)"]
+# The first three entries keep their exact spelling: a saved workflow stores the
+# LABEL a combo shows, so renaming one would silently reset the widget. The
+# "on - ... effort" entries are thinking ON plus a level, the dial Qwen3.8-Flash-
+# Next put on top of the on/off switch.
+THINKING_MODES = [
+    "auto",
+    "off (no thinking)",
+    "on (force thinking)",
+    "on - low effort",
+    "on - medium effort",
+    "on - high effort",
+    "on - xhigh effort",
+]
+
+# label -> the level asked for, in the widget's own vocabulary. What actually
+# goes on the wire is decided per family below: the rungs are NOT the same
+# everywhere and a family does not politely ignore a rung it does not know -
+# Qwen3.8 answers HTTP 500 on reasoning_effort "high", because its ladder stops
+# at xhigh. So the level is translated, never forwarded blindly.
+_THINKING_EFFORT = {
+    "on - low effort": "low",
+    "on - medium effort": "medium",
+    "on - high effort": "high",
+    "on - xhigh effort": "xhigh",
+}
+
+# Qwen3.8 (Flash-Next, 27B, max...): low / medium / xhigh, xhigh being its own
+# default. "high" is not a rung there - it is the one that answers 500.
+_EFFORT_QWEN38 = {"low": "low", "medium": "medium",
+                  "high": "xhigh", "xhigh": "xhigh"}
+# The OpenAI schema, gpt-oss, Phi and DeepSeek: low / medium / high, DeepSeek
+# defaulting to high. Everything above the top rung folds back onto it.
+_EFFORT_OPENAI = {"low": "low", "medium": "medium",
+                  "high": "high", "xhigh": "high"}
+# Qwen3.x before 3.8 has no level dial at all: its depth is a token CAP on the
+# thinking block (thinking_budget), which the Qwen cloud API and the templates
+# that implement it read from chat_template_kwargs. A template that does not
+# know the name ignores it, and the level then only says "thinking on" - which
+# the log states rather than pretending the dial did something.
+_EFFORT_QWEN3_BUDGET = {"low": 1024, "medium": 4096,
+                        "high": 16384, "xhigh": 32768}
+
+# Families that read the OpenAI-style reasoning_effort without being Qwen or
+# DeepSeek. gpt-oss carries it into its harmony system prompt; Phi does the same.
+_OPENAI_EFFORT_FAMILIES = ("gpt-", "phi-", "phi3", "phi4", "grok", "o1-", "o3-", "o4-")
+
+
+def _thinking_family(model: str) -> str:
+    """Which thinking dialect ``model`` speaks: the name is the only clue."""
+    low = (model or "").lower().replace("_", "-")
+    # The dot matters: "qwen3.8-27b" is the new family, "qwen3-8b" is a Qwen3.
+    if "flash-next" in low or "qwen3.8" in low:
+        return "qwen3.8"
+    if "deepseek" in low:
+        return "deepseek"
+    if "qwen3" in low or "qwen-3" in low:
+        return "qwen3"
+    # An older Qwen (2.5, a VL), QwQ, GLM and MiniMax have no depth dial at all:
+    # thinking is on, off, or on by default and that is all. Naming them keeps a
+    # value their template could refuse out of the request.
+    if any(f in low for f in ("qwen", "qwq", "glm", "minimax")):
+        return "no dial"
+    if any(f in low for f in _OPENAI_EFFORT_FAMILIES):
+        return "openai"
+    return ""
+
+
+def _effort_fields(model: str, level: str):
+    """Translate a level into the fields ``model``'s family actually reads.
+
+    Returns (chat_template_kwargs additions, top-level payload additions). Both
+    places are used on purpose for the level-based families: the cloud APIs and
+    vLLM read the top-level field, while llama.cpp and LM Studio hand
+    chat_template_kwargs to the chat template, which is where the Qwen3.8 card
+    puts it. The two dials are never sent together - Qwen3.8-max answers with an
+    error when reasoning_effort and thinking_budget both arrive.
+    """
+    family = _thinking_family(model)
+    if family == "no dial":
+        print("[LLMPromptStudio] %s has no reasoning-depth dial; the level only "
+              "says thinking ON" % model)
+        return {}, {}
+    if family == "qwen3":
+        budget = _EFFORT_QWEN3_BUDGET[level]
+        print("[LLMPromptStudio] %s: Qwen3.x has no effort dial, sending "
+              "thinking_budget = %d tokens (a template that does not implement "
+              "it keeps thinking on, without a cap)" % (model, budget))
+        return {"thinking_budget": budget}, {}
+    if family == "qwen3.8":
+        effort = _EFFORT_QWEN38[level]
+    elif family in ("deepseek", "openai"):
+        effort = _EFFORT_OPENAI[level]
+    else:
+        # Unknown name (a renamed GGUF, "local-model"): the OpenAI ladder is the
+        # widest bet, and _post_chat's retry catches a backend that refuses it.
+        effort = _EFFORT_OPENAI[level]
+        family = "unknown family"
+    if effort != level:
+        print("[LLMPromptStudio] %s (%s) has no '%s' rung: reasoning_effort = %s"
+              % (model, family, level, effort))
+    else:
+        print("[LLMPromptStudio] %s (%s): reasoning_effort = %s"
+              % (model, family, effort))
+    return {"reasoning_effort": effort}, {"reasoning_effort": effort}
 
 # --- "no think" -------------------------------------------------------------
 # A request that says nothing about reasoning is NOT neutral: DeepSeek-style
@@ -61,6 +165,57 @@ _TEMPLATE_THINK_KWARGS = {
 
 def _looks_deepseek(model: str) -> bool:
     return "deepseek" in (model or "").lower()
+
+
+def _looks_flash_next(model: str) -> bool:
+    """Whether ``model`` belongs to the Flash-Next family (Qwen3.8 and quants)."""
+    return "flash-next" in (model or "").lower().replace("_", "-")
+
+
+# Families that DO read the soft switches, checked first: a Qwen3 quant whose
+# file name happens to carry "llama" somewhere is still a Qwen3.
+_THINK_TRIGGER_FAMILIES = ("qwen", "glm")
+
+# Families that do NOT read them, each one for its own reason: no thinking mode
+# at all (Gemma, Mistral, Llama, Granite, Command), a reasoning mode driven by
+# something else entirely (gpt-oss and Phi by reasoning_effort, Nemotron by a
+# system-prompt line), or thinking on by default with no switch to flip
+# (MiniMax M2/M3, interleaved thinking). Order matters only against the list
+# above, which wins.
+_NO_THINK_TRIGGER_FAMILIES = (
+    "gemma", "mistral", "ministral", "magistral", "devstral", "codestral",
+    "pixtral", "llama", "nemotron", "phi-", "phi3", "phi4", "gpt-", "granite",
+    "command-", "gemini", "claude", "minimax",
+)
+
+
+def _has_think_trigger(model: str) -> bool:
+    """Whether ``model`` reads the " /think" and " /no_think" soft switches.
+
+    They are a Qwen3.x chat-template rule, not a protocol: a template that does
+    not implement them leaves the word inside the idea, where the model reads it
+    as one more thing to write about. Flash-Next dropped them - thinking there is
+    chosen by enable_thinking and reasoning_effort - and the families listed
+    above never had them.
+
+    A name matching NOTHING keeps the trigger. That is the deliberate default:
+    an opaque or renamed GGUF ("local-model") is more often a Qwen3 than not,
+    and the trigger is the only lever left on a server that hands
+    chat_template_kwargs to nobody.
+    """
+    low = (model or "").lower().replace("_", "-")
+    if _looks_flash_next(low):
+        print("[LLMPromptStudio] %s has no /think trigger (Flash-Next); the "
+              "thinking switches carry the mode alone" % model)
+        return False
+    if any(f in low for f in _THINK_TRIGGER_FAMILIES):
+        return True
+    hit = next((f for f in _NO_THINK_TRIGGER_FAMILIES if f in low), "")
+    if hit:
+        print("[LLMPromptStudio] %s has no /think trigger ('%s' family); the "
+              "thinking switches carry the mode alone" % (model, hit.strip("-")))
+        return False
+    return True
 
 
 # How many images the node can take. Each connected socket becomes one picture,
@@ -372,11 +527,11 @@ def _load_model(base_url: str, api_key: str, model: str, timeout: int = 300,
                  if context_length > 0 else ""))
     except urllib.error.HTTPError as e:
         try:
-            body = e.read().decode("utf-8")
+            err_body = e.read().decode("utf-8")
         except Exception:
-            body = ""
+            err_body = ""
         print("[LLMPromptStudio] load failed (HTTP %s); leaving it to the server\n%s"
-              % (e.code, body))
+              % (e.code, err_body))
     except Exception as e:
         print("[LLMPromptStudio] load failed (%s); leaving it to the server" % e)
 
@@ -423,7 +578,7 @@ def _unload_model(base_url: str, api_key: str, model: str, timeout: int = 60):
 # Everything here is an extension to the OpenAI chat schema. Backends that
 # validate their request body reject the first one they do not know.
 _EXTENSION_FIELDS = ("top_k", "min_p", "repetition_penalty", "repeat_penalty",
-                     "chat_template_kwargs", "thinking")
+                     "chat_template_kwargs", "thinking", "reasoning_effort")
 
 
 def _carried_error(result) -> str:
@@ -468,7 +623,12 @@ def _post_chat(url: str, payload: dict, api_key: str, timeout: int):
     except urllib.error.HTTPError as e:
         first = "[LLM HTTP ERROR %s] %s\n%s" % (e.code, url, _body(e))
         stripped = {k: v for k, v in payload.items() if k not in _EXTENSION_FIELDS}
-        if e.code not in (400, 422) or len(stripped) == len(payload):
+        # 500 belongs here too: a chat template that refuses one of these values
+        # raises inside the server, which reports it as an internal error rather
+        # than as a bad request - vLLM answers exactly that to a Qwen3.8 asked
+        # for reasoning_effort "high". Nothing is retried when there is no
+        # extension to drop, so a real server failure still costs one request.
+        if e.code not in (400, 422, 500) or len(stripped) == len(payload):
             return None, first
         dropped = ", ".join(k for k in payload if k not in stripped)
         print("[LLMPromptStudio] %s refused the request (HTTP %s); retrying "
@@ -841,7 +1001,22 @@ class LLMPromptStudio:
                     "tooltip": "Reasoning control. 'off' sends every dialect at "
                                "once: /no_think (Qwen3.x), enable_thinking/thinking "
                                "= false, and the non-thinking model alias for "
-                               "DeepSeek. Gemma has no thinking mode; use auto/off.",
+                               "DeepSeek. The 'on - ... effort' entries are "
+                               "thinking ON plus a level, translated to what the "
+                               "model's own family reads: Qwen3.8 (Flash-Next, "
+                               "27B, max) takes low, medium and xhigh - it "
+                               "answers 500 on 'high', so high is folded onto "
+                               "xhigh; DeepSeek, gpt-oss and the OpenAI schema "
+                               "take low, medium and high, so xhigh folds onto "
+                               "high; Qwen3.x before 3.8 has no dial and gets a "
+                               "thinking_budget token cap instead. The console "
+                               "prints what was sent. A level costs output "
+                               "tokens taken from max_tokens. The /think trigger "
+                               "is a Qwen3.x template rule, so it is kept out of "
+                               "the families that do not implement it (Gemma, "
+                               "Mistral, Llama, gpt-oss, MiniMax, Flash-Next...), "
+                               "where it would only stay inside your idea; the "
+                               "switches carry the mode there.",
                 }),
                 # --- output cleanup ---
                 "strip_before_tag": ("STRING", {
@@ -1062,13 +1237,18 @@ class LLMPromptStudio:
                 # rule and would read it as part of the idea. Its proxies take the
                 # Anthropic-style block instead.
                 extra_payload["thinking"] = {"type": "disabled"}
-            else:
+            elif _has_think_trigger(resolved_model):
                 user_text = user_text.rstrip() + " /no_think"
         elif thinking.startswith("on"):
             extra_template_kwargs = dict(_TEMPLATE_THINK_KWARGS[True])
+            level = _THINKING_EFFORT.get(thinking)
+            if level:
+                ctk_extra, payload_extra = _effort_fields(resolved_model, level)
+                extra_template_kwargs.update(ctk_extra)
+                extra_payload.update(payload_extra)
             if _looks_deepseek(resolved_model):
                 extra_payload["thinking"] = {"type": "enabled"}
-            else:
+            elif _has_think_trigger(resolved_model):
                 user_text = user_text.rstrip() + " /think"
 
         # 4) build the user message content (text, + pictures for vision models).
@@ -1162,21 +1342,51 @@ class LLMPromptStudio:
 
         # 8) extract the text
         try:
-            choice = result["choices"][0]["message"]
-            raw = choice.get("content") or ""
-            # some servers expose reasoning separately; ignore it for the clean output
+            choice = result["choices"][0]
+            message = choice["message"]
+            raw = message.get("content") or ""
+            # Some servers keep the reasoning out of content, in a field of their
+            # own. It is never part of the prompt, but it IS what came back when
+            # content is empty, which is the only thing it is read for here.
+            reasoning = (message.get("reasoning_content")
+                         or message.get("reasoning") or "")
+            finish = choice.get("finish_reason") or ""
         except Exception:
             msg = "[LLM ERROR] Unexpected response shape:\n" + json.dumps(result)[:2000]
             print(msg)
             return _ui_result(msg, msg)
 
+        if finish == "length":
+            print("[LLMPromptStudio] the answer was cut at max_tokens (%d); "
+                  "thinking is spent from that same budget" % int(max_tokens))
+
         cleaned = _strip_before_tags(raw, strip_before_tag)
+        if not cleaned.strip():
+            # What a thinking model out of budget returns: a reasoning block and
+            # no answer - either inside content, where the cut tag then leaves
+            # nothing, or in a reasoning field with content empty. Saying so
+            # beats handing an empty prompt to the image model down the graph.
+            why = ("the answer was cut at max_tokens = %d" % int(max_tokens)
+                   if finish == "length" else
+                   "the whole answer is a reasoning block"
+                   if (raw.strip() or reasoning) else
+                   "the response carried no text at all")
+            msg = ("[LLM ERROR] No prompt came back: %s.\nRaise max_tokens, pick a "
+                   "lower thinking level, or turn thinking off - the reasoning "
+                   "block is spent from the same token budget as the prompt."
+                   % why)
+            print(msg)
+            return _ui_result(msg, raw or reasoning or json.dumps(result)[:2000])
 
         # 9) update history (store text turns only)
         if keep_history:
             turn = _HISTORY.setdefault(hist_key, [])
-            turn.append({"role": "user", "content": user_text})
-            turn.append({"role": "assistant", "content": raw})
+            # The idea WITHOUT the /no_think trigger, and the answer without its
+            # reasoning block: a thinking block belongs to the turn that produced
+            # it, and Qwen's own guidance is to keep it out of the history. It
+            # also stops the trigger from piling up in every past turn.
+            turn.append({"role": "user", "content": user_prompt})
+            turn.append({"role": "assistant", "content": cleaned})
             # keep stored memory bounded to the requested number of turns
             if keep_msgs == 0:
                 turn.clear()

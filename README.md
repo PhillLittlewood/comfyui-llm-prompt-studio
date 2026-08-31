@@ -32,11 +32,20 @@ generic preset.
   `repeat_penalty`, `seed` (with `control_after_generate`). `min_p` and the
   repetition penalty each have their own on/off switch.
 - **Output tokens**: `max_tokens` caps the length of the generated answer.
-- **Thinking control** (`auto` / `off` / `on`): `off` states "no thinking" in
-  every dialect at once — `/no_think` + `enable_thinking=false` (**Qwen3.x**,
-  GLM), `thinking=false` (**DeepSeek V3.1+** on vLLM/SGLang), and the
-  **non-thinking model alias** for DeepSeek. Gemma has no thinking mode → use
-  `auto`/`off`. See [Real "no think" (DeepSeek & co)](#real-no-think-deepseek--co).
+- **Thinking control** (`auto` / `off` / `on` / `on - low…xhigh effort`): `off`
+  states "no thinking" in every dialect at once — `/no_think` +
+  `enable_thinking=false` (**Qwen3.x**, GLM), `thinking=false` (**DeepSeek
+  V3.1+** on vLLM/SGLang), and the **non-thinking model alias** for DeepSeek.
+  The ` /no_think` trigger goes only to the templates that read it — Gemma,
+  Mistral, Llama, gpt-oss, MiniMax & co get the switches alone.
+  The `on - … effort` entries are thinking ON **plus a level** — the dial
+  **Qwen3.8** added on top of the on/off switch — *translated to what each
+  family reads*: `reasoning_effort` capped at `xhigh` for Qwen3.8, at `high` for
+  DeepSeek and gpt-oss, a `thinking_budget` token cap for Qwen3.x before 3.8,
+  and nothing at all for the families without a dial. Gemma has no thinking mode
+  → use `auto`/`off`. See
+  [Thinking levels (Qwen3.8 and co)](#thinking-levels-qwen38-and-co) and
+  [Real "no think" (DeepSeek & co)](#real-no-think-deepseek--co).
 - **`no_think_model`** (optional): the model alias called **instead** when
   thinking is `off`. Empty = auto.
 - **Custom cut tag(s)** (`strip_before_tag`): everything **up to and including**
@@ -295,6 +304,12 @@ vllm serve Qwen/Qwen3-8B --port 8000          # add --api-key YOURKEY if you wan
   `<think>…</think>` block, the `strip_before_tag` cleanup removes it from
   `prompt`. For models that use other reasoning tags, list them all
   comma-separated, e.g. `</think>,</thinking>,</reasoning>`.
+- **An empty prompt is reported, never returned.** A thinking model that runs
+  out of budget answers with a reasoning block and nothing else — the cut tag
+  then leaves an empty string, and an empty prompt silently poisons the image
+  node below. The node says so instead, naming `finish_reason = length` when
+  that is what happened, and puts the reasoning it did get on `raw_response`.
+  Raise `max_tokens`, drop to a lower effort level, or turn thinking off.
 - **min_p** is sent as a top-level field (supported by LM Studio/llama.cpp and
   vLLM). `0.0` disables it. A common setup is `min_p = 0.05-0.1` with
   `top_p = 1.0` so min-p does the filtering.
@@ -317,14 +332,18 @@ vllm serve Qwen/Qwen3-8B --port 8000          # add --api-key YOURKEY if you wan
   at the bottom of the node, **`enable_min_p`** and **`enable_repeat_penalty`**,
   are the manual override: off means the field is never sent whatever the
   slider says, so a tuned value can stay parked there while you talk to a
-  backend that refuses it. If a 400/422
-  still comes back the node **retries once without every extension** —
+  backend that refuses it. If a 400/422 — or a **500**, which is how a chat
+  template refusing one of these values surfaces — still comes back, the node
+  **retries once without every extension** —
   including the thinking switches — and prints exactly what it dropped. You get
   an answer instead of a dead end; the cut tag still strips any reasoning block
   the retry let through.
 - **Multi-turn**: turn on `keep_history`. Each queued run appends a turn, and
   `max_history_turns` controls how many past turns are remembered (context
-  depth). Flip `reset_history` on (and queue once) to wipe the memory.
+  depth). Flip `reset_history` on (and queue once) to wipe the memory. What is
+  stored is the **clean** turn: your idea without the `/no_think` trigger, and
+  the answer after the cut tag — a reasoning block belongs to the turn that
+  produced it, and Qwen's own guidance is to keep it out of the history.
 - **Context window vs. output**: `max_tokens` sets the **output** length. The
   model's raw **context window** (how much it can read in) is fixed when you
   load the model in LM Studio / vLLM, not per request — set it there.
@@ -344,6 +363,70 @@ vllm serve Qwen/Qwen3-8B --port 8000          # add --api-key YOURKEY if you wan
 
 ---
 
+## Thinking levels (Qwen3.8 and co)
+
+Qwen3.8-Flash-Next thinks **by default** and exposes a *reasoning effort* dial
+instead of a plain on/off: `low`, `medium`, `xhigh` (its own default). The
+`thinking` widget carries it — `on - low effort`, `on - medium effort`,
+`on - high effort`, `on - xhigh effort` — next to `enable_thinking: true`, so
+one entry states the mode and the depth at once. `on (force thinking)` sends no
+level and leaves the model on its own default.
+
+### The level is translated, never forwarded blindly
+
+The rungs are **not the same from one family to the next**, and a family does
+not politely ignore a rung it does not know: a Qwen3.8 asked for
+`reasoning_effort: "high"` answers **HTTP 500** — its ladder stops at `xhigh`.
+So the node reads the model name and sends what that family actually
+understands:
+
+| Family (by model name) | What goes out | Rungs |
+|---|---|---|
+| **Qwen3.8** — `qwen3.8*`, `*flash-next*` | `reasoning_effort`, top level **and** in `chat_template_kwargs` | `low` · `medium` · `xhigh` — **`high` → `xhigh`** |
+| **DeepSeek** — `*deepseek*` | `reasoning_effort` (+ its `thinking: {"type": "enabled"}` block) | `low` · `medium` · `high` (its default) — **`xhigh` → `high`** |
+| **gpt-oss, Phi, o-series** | `reasoning_effort` | `low` · `medium` · `high` — **`xhigh` → `high`** |
+| **Qwen3.x before 3.8** — `qwen3*`, `qwen-3*` | `chat_template_kwargs: {thinking_budget: N}` — a token **cap** on the thinking block, its only dial | 1024 · 4096 · 16384 · 32768 tokens |
+| **No dial** — other Qwen (2.5, VL), QwQ, GLM, MiniMax | *nothing* — the level only means "thinking ON" | — |
+| **Unknown name** — `local-model`, a renamed GGUF | `reasoning_effort` (the widest bet) | `low` · `medium` · `high` |
+
+Two dials are never sent together: Qwen3.8-max answers with an error when
+`reasoning_effort` and `thinking_budget` both arrive.
+
+Everything is printed, so the translation is never a mystery:
+
+```
+[LLMPromptStudio] Qwen3.8-27B (qwen3.8) has no 'high' rung: reasoning_effort = xhigh
+[LLMPromptStudio] qwen3-8b: Qwen3.x has no effort dial, sending thinking_budget = 4096 tokens (…)
+[LLMPromptStudio] glm-4.6 has no reasoning-depth dial; the level only says thinking ON
+```
+
+And if a template refuses a value anyway, the [retry](#notes--tips) catches it:
+a chat template raising inside the server is reported as **500**, not 400, so
+500 is retried too — once, without the extension fields, and the console names
+what it dropped.
+
+**A level costs output tokens.** Thinking is spent from the same `max_tokens`
+budget as the prompt, so `xhigh` with `max_tokens = 256` returns a reasoning
+block and no prompt. The node names that failure instead of handing an empty
+string down the graph.
+
+Flash-Next also dropped the ` /think` and ` /no_think` soft switches, so the
+node keeps the trigger out of its requests and lets `enable_thinking` +
+`reasoning_effort` carry the mode — same treatment as every other family that
+does not implement it, see
+[Who gets the ` /no_think` trigger](#who-gets-the-no_think-trigger):
+
+```
+[LLMPromptStudio] Qwen3.8-Flash-Next has no /think trigger (Flash-Next); the thinking switches carry the mode alone
+```
+
+Its third switch, `preserve_thinking`, decides whether thinking blocks from
+**past** turns stay in the conversation. The node needs no widget for it: the
+history it keeps stores the **cleaned** answer, so there is never a reasoning
+block in it to preserve.
+
+---
+
 ## Real "no think" (DeepSeek & co)
 
 A request that says nothing about reasoning is **not** neutral. DeepSeek-style
@@ -360,7 +443,7 @@ prompt writing.
 | Non-thinking **model alias** | `model: "deepseek-chat"` | DeepSeek API / ds4 — **the one that always wins** |
 | Chat-template switch | `chat_template_kwargs: {enable_thinking: false, thinking: false}` | Qwen3.x, GLM (`enable_thinking`) · DeepSeek V3.1+ on vLLM/SGLang (`thinking`) |
 | Reasoning block | `thinking: {"type": "disabled"}` | DeepSeek-compatible proxies |
-| Prompt trigger | ` /no_think` appended to your idea | Qwen3.x chat template |
+| Prompt trigger | ` /no_think` appended to your idea | Qwen3.x and GLM chat templates — **skipped** for every family that does not implement it |
 
 The alias swap is **automatic and safe**: a DeepSeek model is switched to
 `deepseek-chat` **only if the server actually serves that name** (checked via
@@ -371,8 +454,38 @@ the flags only — no renaming, no 404. What happened is printed in the console:
 [LLMPromptStudio] no think: deepseek-reasoner -> deepseek-chat
 ```
 
-The ` /no_think` trigger is **not** appended for DeepSeek — it is a Qwen chat
-template rule, and DeepSeek would simply read it as part of your idea.
+### Who gets the ` /no_think` trigger
+
+It is a **chat-template rule, not a protocol**: a template that does not
+implement it leaves the word inside your idea, where the model takes it for one
+more thing to write about. The model name is the only clue available, so the
+node sorts it in that order:
+
+1. **Flash-Next** (`qwen3.8-flash-next`, quants included) → no trigger. It
+   dropped the soft switches; `enable_thinking` + `reasoning_effort` carry the
+   mode.
+2. **`qwen` or `glm` in the name** → trigger. Checked *before* the list below,
+   so a Qwen3 quant whose file name happens to carry "llama" is still a Qwen3.
+3. **A family known not to read it** → no trigger: `gemma`, `mistral`
+   (+ `ministral`, `magistral`, `devstral`, `codestral`, `pixtral`), `llama`,
+   `nemotron`, `phi`, `gpt-` (gpt-oss included), `granite`, `command-`,
+   `gemini`, `claude`, `minimax`. Either they have no thinking mode at all, or
+   their reasoning is driven by something else (`reasoning_effort` for gpt-oss
+   and Phi, a system-prompt line for Nemotron), or it is simply on by default
+   with nothing to flip (MiniMax M2/M3 and its interleaved thinking).
+4. **DeepSeek** → no trigger, the alias and `thinking: {"type": "disabled"}` do
+   the job.
+5. **Anything else**, including an opaque or renamed GGUF (`local-model`,
+   `my-fine-tune-v2`) → **trigger**. That default is deliberate: an unnamed
+   local model is more often a Qwen3 than not, and the trigger is the only lever
+   left on a server that hands `chat_template_kwargs` to nobody.
+
+Whatever the outcome, the chat-template switches are sent to **everyone** — the
+trigger is only the second belt. What was decided is printed:
+
+```
+[LLMPromptStudio] gemma-3-27b-it has no /think trigger ('gemma' family); the thinking switches carry the mode alone
+```
 
 **`no_think_model`** (optional, last widget) overrides all of it: type the exact
 alias your server exposes (e.g. `deepseek-chat`, `my-chat-alias`) and it is
