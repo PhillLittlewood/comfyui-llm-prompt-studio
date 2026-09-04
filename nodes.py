@@ -371,15 +371,33 @@ def _list_models(base_url: str, api_key: str, timeout: int = 10):
     return out
 
 
+def _looks_chat(model) -> bool:
+    """False for what a chat request can never use: encoders, embeddings, TTS."""
+    low = str(model).lower()
+    return not any(h in low for h in _NON_CHAT_HINTS)
+
+
 def _pick_chat_model(models):
     """Pick the first model that does not look like a text-encoder/embedding."""
     if not models:
         return None
     for m in models:
-        low = str(m).lower()
-        if not any(h in low for h in _NON_CHAT_HINTS):
+        if _looks_chat(m):
             return m
     return models[0]
+
+
+def _chat_models_first(models):
+    """Same list, chat models on top - for the front-end dropdown.
+
+    The hints are substrings, so a legitimate name could match one by accident
+    ('t5' inside a model's own name). Dropping the matches would hide it for
+    good; sorting them to the bottom keeps every model reachable and still puts
+    the useful ones under the cursor.
+    """
+    chat = [m for m in models if _looks_chat(m)]
+    rest = [m for m in models if not _looks_chat(m)]
+    return chat + rest
 
 
 def _resolve_model(base_url: str, api_key: str, model: str, timeout: int):

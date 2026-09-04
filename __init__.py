@@ -16,6 +16,7 @@ from .civitai_prompt import (
 from .nodes import (
     NODE_CLASS_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS,
+    _chat_models_first,
     _list_models,
     _pick_chat_model,
 )
@@ -56,7 +57,10 @@ try:
             loop = asyncio.get_event_loop()
             models = await loop.run_in_executor(None, _list_models, base_url, api_key)
             suggested = _pick_chat_model(models)
-            return web.json_response({"models": models, "suggested": suggested})
+            # Chat models on top: the dropdown is read top-down and an encoder
+            # is never an answer to "which model writes my prompt".
+            return web.json_response({"models": _chat_models_first(models),
+                                      "suggested": suggested})
         except Exception as e:
             return web.json_response({"models": [], "suggested": None, "error": str(e)})
 

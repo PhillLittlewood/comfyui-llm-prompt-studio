@@ -23,31 +23,93 @@ function getWidget(node, name) {
     return node.widgets?.find((w) => w.name === name);
 }
 
-// Optional convenience: fill the (empty) model text field with the chat model
-// detected at the address. Leaving the field empty also works: the node
-// auto-detects at run time. Text-encoder / embedding models are skipped.
-async function detectModel(node) {
+// A widget the node draws but never sends. TWO flags are needed, because the
+// frontend reads a different one on each path:
+//   - the workflow serializer skips `widget.serialize === false` (widgets_values);
+//   - graphToPrompt, which builds what the backend runs, skips only
+//     `widget.options.serialize === false`.
+// Setting just the first one leaves the widget in the prompt's `inputs`, and the
+// backend hashes EVERY key of `inputs` into the execution cache signature
+// (comfy_execution/caching.py). `generated_text` holds a different prompt after
+// every run, so the node's signature changed on every queue and the LLM was
+// called again - a fixed seed could not cache it. Set both, always.
+function dontSerialize(w) {
+    if (!w) return w;
+    w.serialize = false;
+    w.options = w.options || {};
+    w.options.serialize = false;
+    return w;
+}
+
+// ------------------------------------------------------------- model picker
+// The `model` field stays a free-text STRING on the backend: a saved workflow
+// may name a model the server is not serving right now, and an empty value is
+// the documented "use whatever is loaded" mode. So the dropdown does not
+// replace the field - it writes into it. That also keeps it out of
+// widgets_values, whose save path indexes by widget position while its load
+// path compacts over the serialized ones: a picker inserted among the real
+// widgets would shift every saved workflow by a slot.
+const PICKER_NAME = "📋 Models on the server";
+const PICK_AUTO = "(auto) use the model loaded at the address";
+const PICK_EMPTY = "(press Detect / refresh to list them)";
+
+async function fetchModels(node) {
     const base = getWidget(node, "base_url")?.value || "http://localhost:1234/v1";
     const key = getWidget(node, "api_key")?.value || "";
-    const modelW = getWidget(node, "model");
-    if (!modelW) return;
+    const url =
+        "/llm_prompt_studio/models?base_url=" +
+        encodeURIComponent(base) +
+        "&api_key=" +
+        encodeURIComponent(key);
     try {
-        const url =
-            "/llm_prompt_studio/models?base_url=" +
-            encodeURIComponent(base) +
-            "&api_key=" +
-            encodeURIComponent(key);
         const r = await api.fetchApi(url);
         const data = await r.json();
-        const pick = data.suggested || (data.models && data.models[0]);
-        if (pick) {
-            modelW.value = pick;
-            app.graph.setDirtyCanvas(true, true);
-        } else {
-            console.warn("[coco] no chat model found at", base, data.error || "");
-        }
+        return { base, ...data };
     } catch (e) {
-        console.error("[coco] model detection failed:", e);
+        console.error("[coco] model list failed:", e);
+        return { base, models: [], suggested: null, error: String(e) };
+    }
+}
+
+// Fill the dropdown with what the address answered. A dead address leaves one
+// entry saying so, rather than an empty list that looks like a broken widget.
+function fillPicker(node, data) {
+    const w = getWidget(node, PICKER_NAME);
+    if (!w) return;
+    const served = Array.isArray(data?.models) ? data.models : [];
+    const cur = (getWidget(node, "model")?.value || "").trim();
+    if (!served.length) {
+        // Say the address answered nothing instead of showing an empty list,
+        // which reads as a broken widget.
+        w._models = new Set();
+        w.options.values = ["(no model listed at " + data.base + ")"];
+        w.value = w.options.values[0];
+        console.warn("[coco] no model at", data.base, data?.error || "");
+    } else {
+        // A forced name the server is not serving right now still has to show
+        // as the current pick, otherwise the dropdown claims 'auto' while the
+        // field says otherwise.
+        const all = served.includes(cur) || !cur ? served : [...served, cur];
+        w._models = new Set(all);
+        w.options.values = [PICK_AUTO, ...all];
+        w.value = cur && w._models.has(cur) ? cur : PICK_AUTO;
+    }
+    app.graph.setDirtyCanvas(true, true);
+}
+
+// Refresh the list, and - only when asked - drop the detected chat model into
+// the text field. Text-encoder / embedding models are skipped server-side.
+async function detectModel(node, fillField = true) {
+    const data = await fetchModels(node);
+    fillPicker(node, data);
+    if (!fillField) return;
+    const modelW = getWidget(node, "model");
+    const pick = data.suggested || (data.models && data.models[0]);
+    if (modelW && pick) {
+        modelW.value = pick;
+        const w = getWidget(node, PICKER_NAME);
+        if (w && w._models?.has(pick)) w.value = pick;
+        app.graph.setDirtyCanvas(true, true);
     }
 }
 
@@ -142,9 +204,10 @@ function makeAllResizable(node) {
     for (const w of node.widgets || []) makeResizable(node, w);
 }
 
-// A display-only text box added at run time. serialize:false so it never lands
-// in widgets_values, which is positional: one extra entry there would shift
-// every saved workflow by a slot.
+// A display-only text box added at run time. Never serialized: widgets_values is
+// positional, so one extra entry there would shift every saved workflow by a
+// slot - and the prompt's `inputs` feed the execution cache, so a box holding
+// the last run's text would invalidate the node on every queue.
 function readonlyBox(node, name) {
     let w = node.widgets?.find((x) => x.name === name);
     if (!w) {
@@ -154,7 +217,7 @@ function readonlyBox(node, name) {
             ["STRING", { multiline: true }],
             app
         ).widget;
-        w.serialize = false;
+        dontSerialize(w);
         const el = w.element || w.inputEl;
         if (el) {
             el.readOnly = true;
@@ -221,16 +284,43 @@ app.registerExtension({
             const ret = onNodeCreated?.apply(this, arguments);
             const node = this;
 
+            // Pick a model instead of typing its name. Appended (never spliced
+            // among the real widgets) and never serialized - see dontSerialize.
+            const picker = node.addWidget(
+                "combo",
+                PICKER_NAME,
+                PICK_EMPTY,
+                (v) => {
+                    const modelW = getWidget(node, "model");
+                    if (!modelW) return;
+                    if (v === PICK_AUTO) modelW.value = "";
+                    else if (picker._models?.has(v)) modelW.value = v;
+                    app.graph.setDirtyCanvas(true, true);
+                },
+                { values: [PICK_EMPTY], serialize: false }
+            );
+            dontSerialize(picker);
+
             // Optional: detect & show which model will be used (field can stay empty).
-            // serialize:false so these buttons never end up in widgets_values
-            // (which would shift the positional mapping of the real inputs).
             const detectBtn = node.addWidget(
                 "button",
-                "🔄 Detect model (optional)",
+                "🔄 Detect model / refresh the list",
                 null,
                 () => detectModel(node)
             );
-            detectBtn.serialize = false;
+            dontSerialize(detectBtn);
+
+            // Pointing at another server must not keep offering the old list.
+            for (const name of ["base_url", "api_key"]) {
+                const w = getWidget(node, name);
+                if (!w) continue;
+                const orig = w.callback;
+                w.callback = function () {
+                    const r = orig?.apply(this, arguments);
+                    detectModel(node, false);
+                    return r;
+                };
+            }
 
             const applyTemplate = async () => {
                 await loadTemplates();
@@ -250,7 +340,7 @@ app.registerExtension({
                 null,
                 applyTemplate
             );
-            presetBtn.serialize = false;
+            dontSerialize(presetBtn);
 
             // Auto-load the matching preset into the system prompt box on change.
             const tw = getWidget(node, "target_model");
@@ -269,8 +359,10 @@ app.registerExtension({
             setTimeout(() => {
                 const sw = getWidget(node, "system_prompt");
                 if (sw && (!sw.value || !sw.value.trim())) applyTemplate();
+                // Always list what the address serves; only fill the empty
+                // field on a brand-new node, never clobber a saved value.
                 const mw = getWidget(node, "model");
-                if (mw && (!mw.value || !mw.value.trim())) detectModel(node);
+                detectModel(node, !(mw && mw.value && mw.value.trim()));
                 // After configure(), so a saved workflow's box heights are back.
                 makeAllResizable(node);
             }, 250);
@@ -295,7 +387,7 @@ app.registerExtension({
                     ["STRING", { multiline: true }],
                     app
                 ).widget;
-                w.serialize = false; // preview only; never saved into widgets_values
+                dontSerialize(w); // preview only: saved nowhere, sent nowhere
                 if (w.inputEl) {
                     w.inputEl.readOnly = true;
                     w.inputEl.style.opacity = "0.85";

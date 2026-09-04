@@ -17,8 +17,13 @@ generic preset.
 - **OpenAI mode**: works with LM Studio (`/v1`) and vLLM (`--api ... /v1`).
 - **No model picking**: leave the `model` field **empty** and the node
   automatically uses the chat model loaded at your address (text-encoder /
-  embedding models are skipped). The optional 🔄 button just shows you which
-  one was detected; type a name only to force a specific model.
+  embedding models are skipped). Nothing to type.
+- **Model dropdown**: 📋 *Models on the server* lists what your address serves
+  (chat models on top) and writes your pick into the `model` field; its first
+  entry puts the field back to *empty = auto*. 🔄 *Detect model / refresh the
+  list* re-reads the list, and it refreshes on its own when you change
+  `base_url` or `api_key`. Typing a name by hand still works — a model that is
+  not loaded right now stays selectable.
 - **Text boxes**:
   - `global_directives` – your own global rules, applied on top of the system
     prompt for **every** target model (e.g. "always add cinematic lighting").
@@ -278,8 +283,8 @@ The node appears under **Add Node → LLM Prompt Studio**, named
 1. Load a model and start the local server (Developer tab → *Start Server*).
 2. `base_url` = `http://localhost:1234/v1` (default).
 3. `api_key` can be anything (e.g. `lm-studio`).
-4. Leave `model` **empty** (auto) — or click **🔄 Detect model** to see which
-   chat model was found.
+4. Leave `model` **empty** (auto), or pick one in **📋 Models on the server**
+   (press **🔄 Detect model / refresh the list** if the list looks stale).
 
 ### vLLM
 ```bash
@@ -287,7 +292,8 @@ vllm serve Qwen/Qwen3-8B --port 8000          # add --api-key YOURKEY if you wan
 ```
 1. `base_url` = `http://localhost:8000/v1`.
 2. `api_key` = your `--api-key` (or leave default if none).
-3. Leave `model` empty (auto-detected) or **🔄 Detect model**.
+3. Leave `model` empty (auto-detected), or pick one in **📋 Models on the
+   server**.
 
 ### Then
 - Choose your **target_model** (e.g. *Illustrious*). The matching English prompt
@@ -299,6 +305,12 @@ vllm serve Qwen/Qwen3-8B --port 8000          # add --api-key YOURKEY if you wan
 
 ## Notes & tips
 
+- **Keeping the same prompt (2-pass / hires workflows)**: set `seed` to
+  **fixed** and the node is cached — the next queue reuses the prompt it already
+  wrote instead of calling the LLM again. `control_after_generate` on
+  *randomize* is what makes it write a new one every run. Inside a single
+  workflow you never need this: wire the one `prompt` output to both passes'
+  text encoders and the LLM is called once.
 - **Thinking / Qwen3.x**: with `thinking = off`, the node appends `/no_think`
   and asks vLLM to disable the reasoning template. Even if a model still emits a
   `<think>…</think>` block, the `strip_before_tag` cleanup removes it from
