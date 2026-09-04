@@ -41,17 +41,89 @@ function dontSerialize(w) {
     return w;
 }
 
-// ------------------------------------------------------------- model picker
-// The `model` field stays a free-text STRING on the backend: a saved workflow
-// may name a model the server is not serving right now, and an empty value is
-// the documented "use whatever is loaded" mode. So the dropdown does not
-// replace the field - it writes into it. That also keeps it out of
-// widgets_values, whose save path indexes by widget position while its load
-// path compacts over the serialized ones: a picker inserted among the real
-// widgets would shift every saved workflow by a slot.
-const PICKER_NAME = "📋 Models on the server";
-const PICK_AUTO = "(auto) use the model loaded at the address";
-const PICK_EMPTY = "(press Detect / refresh to list them)";
+// -------------------------------------------------------------- model combo
+// `model` is a STRING on the backend and stays one: a saved workflow may name a
+// model the server is not serving right now, and an empty value is the "use
+// whatever is loaded" mode. The dropdown is not a widget added next to it - a
+// second widget cannot be put THERE anyway. widgets_values is saved indexed by
+// widget position but reloaded by counting the serialized ones, so a
+// non-serialized widget inserted among them writes a hole that shifts every
+// saved workflow by a slot; and appending it at the bottom of the node is where
+// nobody found it. So the text widget is swapped for a real combo IN ITS OWN
+// SLOT: same name, same position, same serialization - nothing shifts, and a
+// workflow saved before this change reloads with its typed name selected.
+//
+// Setting `type = "combo"` on the existing widget does NOT work: the frontend
+// binds the renderer to the widget class at construction, so it keeps drawing a
+// text field. Only a widget built by addWidget("combo", ...) is drawn as one.
+const PICK_AUTO = "(auto) use the loaded model";
+const PICK_TYPE = "✏️ type a name…";
+// Both are sent as the model name when picked; the backend reads them as "auto"
+// (_AUTO_MODEL in nodes.py). No value mapping to get wrong on the way out.
+
+function modelWidget(node) {
+    return getWidget(node, "model");
+}
+
+// Every entry the dropdown should offer, current value included so a forced
+// name the server is not serving right now stays visible and selectable.
+function modelValues(node, served) {
+    const w = modelWidget(node);
+    const cur = String(w?.value ?? "").trim();
+    const out = [PICK_AUTO];
+    for (const m of served || []) if (!out.includes(m)) out.push(m);
+    if (cur && cur !== PICK_TYPE && !out.includes(cur)) out.push(cur);
+    out.push(PICK_TYPE);
+    return out;
+}
+
+// An empty value is what every workflow saved before the dropdown holds, and
+// what the node def defaults to: show it as the auto entry rather than blank.
+function normalizeModel(node) {
+    const w = modelWidget(node);
+    if (!w) return;
+    const cur = String(w.value ?? "").trim();
+    if (!cur || cur === PICK_TYPE) w.value = PICK_AUTO;
+    w.options = w.options || {};
+    w.options.values = modelValues(node, w.options.values?.filter(
+        (v) => v !== PICK_AUTO && v !== PICK_TYPE) || []);
+}
+
+function swapModelToCombo(node) {
+    const old = modelWidget(node);
+    if (!old || old.type === "combo") return old;
+    const i = node.widgets.indexOf(old);
+    try {
+        const combo = node.addWidget(
+            "combo",
+            "model",
+            String(old.value ?? "").trim() || PICK_AUTO,
+            (v) => {
+                if (v !== PICK_TYPE) return;
+                // The escape hatch: a model the address does not list yet.
+                const typed = window.prompt(
+                    "Model name to force (empty = use the loaded model):",
+                    ""
+                );
+                const name = (typed || "").trim();
+                combo.value = name || PICK_AUTO;
+                if (name && !combo.options.values.includes(name)) {
+                    combo.options.values.splice(
+                        combo.options.values.length - 1, 0, name);
+                }
+                app.graph.setDirtyCanvas(true, true);
+            },
+            { values: [PICK_AUTO, PICK_TYPE], tooltip: old.options?.tooltip }
+        );
+        node.widgets.pop();              // addWidget appends; we want the old slot
+        node.widgets.splice(i, 1, combo);
+        old.onRemove?.();
+        return combo;
+    } catch (e) {
+        console.warn("[coco] could not turn 'model' into a dropdown:", e);
+        return old;
+    }
+}
 
 async function fetchModels(node) {
     const base = getWidget(node, "base_url")?.value || "http://localhost:1234/v1";
@@ -71,46 +143,20 @@ async function fetchModels(node) {
     }
 }
 
-// Fill the dropdown with what the address answered. A dead address leaves one
-// entry saying so, rather than an empty list that looks like a broken widget.
-function fillPicker(node, data) {
-    const w = getWidget(node, PICKER_NAME);
+// Refresh the dropdown, and - only when asked - select the detected chat model.
+// Text-encoder / embedding models are sorted to the bottom server-side.
+async function detectModel(node, select = false) {
+    const w = modelWidget(node);
     if (!w) return;
-    const served = Array.isArray(data?.models) ? data.models : [];
-    const cur = (getWidget(node, "model")?.value || "").trim();
-    if (!served.length) {
-        // Say the address answered nothing instead of showing an empty list,
-        // which reads as a broken widget.
-        w._models = new Set();
-        w.options.values = ["(no model listed at " + data.base + ")"];
-        w.value = w.options.values[0];
-        console.warn("[coco] no model at", data.base, data?.error || "");
-    } else {
-        // A forced name the server is not serving right now still has to show
-        // as the current pick, otherwise the dropdown claims 'auto' while the
-        // field says otherwise.
-        const all = served.includes(cur) || !cur ? served : [...served, cur];
-        w._models = new Set(all);
-        w.options.values = [PICK_AUTO, ...all];
-        w.value = cur && w._models.has(cur) ? cur : PICK_AUTO;
-    }
-    app.graph.setDirtyCanvas(true, true);
-}
-
-// Refresh the list, and - only when asked - drop the detected chat model into
-// the text field. Text-encoder / embedding models are skipped server-side.
-async function detectModel(node, fillField = true) {
     const data = await fetchModels(node);
-    fillPicker(node, data);
-    if (!fillField) return;
-    const modelW = getWidget(node, "model");
-    const pick = data.suggested || (data.models && data.models[0]);
-    if (modelW && pick) {
-        modelW.value = pick;
-        const w = getWidget(node, PICKER_NAME);
-        if (w && w._models?.has(pick)) w.value = pick;
-        app.graph.setDirtyCanvas(true, true);
-    }
+    const served = Array.isArray(data.models) ? data.models : [];
+    if (!served.length) console.warn("[coco] no model at", data.base, data.error || "");
+    w.options = w.options || {};
+    w.options.values = modelValues(node, served);
+    const pick = data.suggested || served[0];
+    if (select && pick) w.value = pick;
+    else if (!w.options.values.includes(w.value)) w.value = PICK_AUTO;
+    app.graph.setDirtyCanvas(true, true);
 }
 
 // ------------------------------------------------------------- resizable boxes
@@ -284,27 +330,13 @@ app.registerExtension({
             const ret = onNodeCreated?.apply(this, arguments);
             const node = this;
 
-            // Pick a model instead of typing its name. Appended (never spliced
-            // among the real widgets) and never serialized - see dontSerialize.
-            const picker = node.addWidget(
-                "combo",
-                PICKER_NAME,
-                PICK_EMPTY,
-                (v) => {
-                    const modelW = getWidget(node, "model");
-                    if (!modelW) return;
-                    if (v === PICK_AUTO) modelW.value = "";
-                    else if (picker._models?.has(v)) modelW.value = v;
-                    app.graph.setDirtyCanvas(true, true);
-                },
-                { values: [PICK_EMPTY], serialize: false }
-            );
-            dontSerialize(picker);
+            // Turn `model` into a dropdown, in its own slot. Done before
+            // configure() runs, so a saved value lands straight in the combo.
+            swapModelToCombo(node);
 
-            // Optional: detect & show which model will be used (field can stay empty).
             const detectBtn = node.addWidget(
                 "button",
-                "🔄 Detect model / refresh the list",
+                "🔄 Refresh the model list",
                 null,
                 () => detectModel(node)
             );
@@ -317,7 +349,7 @@ app.registerExtension({
                 const orig = w.callback;
                 w.callback = function () {
                     const r = orig?.apply(this, arguments);
-                    detectModel(node, false);
+                    detectModel(node);
                     return r;
                 };
             }
@@ -359,10 +391,10 @@ app.registerExtension({
             setTimeout(() => {
                 const sw = getWidget(node, "system_prompt");
                 if (sw && (!sw.value || !sw.value.trim())) applyTemplate();
-                // Always list what the address serves; only fill the empty
-                // field on a brand-new node, never clobber a saved value.
-                const mw = getWidget(node, "model");
-                detectModel(node, !(mw && mw.value && mw.value.trim()));
+                // A saved name is kept as the selected entry; the list around
+                // it is refreshed either way. Auto stays the default pick.
+                normalizeModel(node);
+                detectModel(node);
                 // After configure(), so a saved workflow's box heights are back.
                 makeAllResizable(node);
             }, 250);

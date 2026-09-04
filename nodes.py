@@ -340,10 +340,16 @@ def _http_post_json(url: str, payload: dict, api_key: str, timeout: int):
 
 
 # Values that mean "no explicit model -> auto-detect".
+# Everything the front-end can leave in the `model` field that means "pick the
+# chat model loaded at the address yourself". The dropdown's own two non-model
+# entries are in here, so what it shows is exactly what it sends: no label to
+# translate back into a name on the way out, and nothing to get wrong when a
+# workflow saved by an older version arrives with one of the old placeholders.
 _AUTO_MODEL = {
     "", "auto", "(auto)", "(loading...)", "(no models found)",
     "(server unreachable)", "-- click 🔄 refresh models --",
     "-- click 🔄 detect model --",
+    "(auto) use the loaded model", "✏️ type a name…",
 }
 # Substrings that mark a NON-chat model (text encoders, embeddings, etc.).
 _NON_CHAT_HINTS = (
@@ -963,8 +969,11 @@ class LLMPromptStudio:
                 # (text-encoder / embedding models are skipped).
                 "model": ("STRING", {
                     "default": "",
-                    "tooltip": "Leave EMPTY to auto-use the chat model loaded at the "
-                               "address. Only type a name to force a specific model.",
+                    "tooltip": "Dropdown of the models served at the address, chat "
+                               "ones on top. '(auto)' uses whichever chat model is "
+                               "loaded there - that is the setting to leave alone. "
+                               "'type a name' forces one the address does not list "
+                               "yet. 🔄 re-reads the list.",
                 }),
                 # --- target model preset ---
                 "target_model": (TEMPLATE_ORDER, {

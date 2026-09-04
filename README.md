@@ -15,15 +15,14 @@ generic preset.
 ## Features
 
 - **OpenAI mode**: works with LM Studio (`/v1`) and vLLM (`--api ... /v1`).
-- **No model picking**: leave the `model` field **empty** and the node
-  automatically uses the chat model loaded at your address (text-encoder /
-  embedding models are skipped). Nothing to type.
-- **Model dropdown**: 📋 *Models on the server* lists what your address serves
-  (chat models on top) and writes your pick into the `model` field; its first
-  entry puts the field back to *empty = auto*. 🔄 *Detect model / refresh the
-  list* re-reads the list, and it refreshes on its own when you change
-  `base_url` or `api_key`. Typing a name by hand still works — a model that is
-  not loaded right now stays selectable.
+- **No model picking**: leave `model` on `(auto)` and the node automatically
+  uses the chat model loaded at your address (text-encoder / embedding models
+  are skipped). Nothing to type.
+- **Model dropdown**: the `model` field itself is a list of what your address
+  serves, chat models on top. `(auto) use the loaded model` is the default and
+  the one to leave alone; `✏️ type a name…` forces a model the address does not
+  list yet. The list refreshes on its own when you change `base_url` or
+  `api_key`, and **🔄 Refresh the model list** re-reads it on demand.
 - **Text boxes**:
   - `global_directives` – your own global rules, applied on top of the system
     prompt for **every** target model (e.g. "always add cinematic lighting").
@@ -283,8 +282,8 @@ The node appears under **Add Node → LLM Prompt Studio**, named
 1. Load a model and start the local server (Developer tab → *Start Server*).
 2. `base_url` = `http://localhost:1234/v1` (default).
 3. `api_key` can be anything (e.g. `lm-studio`).
-4. Leave `model` **empty** (auto), or pick one in **📋 Models on the server**
-   (press **🔄 Detect model / refresh the list** if the list looks stale).
+4. Leave `model` on **`(auto) use the loaded model`**, or pick one in the list
+   (press **🔄 Refresh the model list** if it looks stale).
 
 ### vLLM
 ```bash
@@ -292,8 +291,7 @@ vllm serve Qwen/Qwen3-8B --port 8000          # add --api-key YOURKEY if you wan
 ```
 1. `base_url` = `http://localhost:8000/v1`.
 2. `api_key` = your `--api-key` (or leave default if none).
-3. Leave `model` empty (auto-detected), or pick one in **📋 Models on the
-   server**.
+3. Leave `model` on `(auto)`, or pick one in the list.
 
 ### Then
 - Choose your **target_model** (e.g. *Illustrious*). The matching English prompt
