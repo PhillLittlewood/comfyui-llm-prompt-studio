@@ -18,11 +18,15 @@ generic preset.
 - **No model picking**: leave `model` on `(auto)` and the node automatically
   uses the chat model loaded at your address (text-encoder / embedding models
   are skipped). Nothing to type.
-- **Model dropdown**: the `model` field itself is a list of what your address
-  serves, chat models on top. `(auto) use the loaded model` is the default and
-  the one to leave alone; `✏️ type a name…` forces a model the address does not
-  list yet. The list refreshes on its own when you change `base_url` or
-  `api_key`, and **🔄 Refresh the model list** re-reads it on demand.
+- **Model dropdown**: the `model` field itself is a list, chat models on top.
+  It holds **every model on the server, loaded or not** — LM Studio's own API is
+  asked for the whole catalogue, so you can switch between the models you have
+  without going to load them by hand first; one that is not in memory is loaded
+  on the first run that needs it. `(auto) use the loaded model` is the default
+  and the one to leave alone; `✏️ type a name…` opens a box, filled with the
+  current name, for anything the list does not have — a remote model, a proxy
+  alias, a name that does not exist yet. The list refreshes when you change
+  `base_url` or `api_key`, and **🔄 Refresh the model list** re-reads it.
 - **Text boxes**:
   - `global_directives` – your own global rules, applied on top of the system
     prompt for **every** target model (e.g. "always add cinematic lighting").

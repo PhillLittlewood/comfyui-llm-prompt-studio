@@ -383,6 +383,42 @@ def _looks_chat(model) -> bool:
     return not any(h in low for h in _NON_CHAT_HINTS)
 
 
+def _downloaded_models(base_url: str, api_key: str, timeout: int = 10):
+    """Every model the server holds on disk, in memory or not.
+
+    /v1/models is the OpenAI surface, and what it advertises is up to the
+    server: with just-in-time loading off, LM Studio lists there only what is
+    already in memory. A dropdown built from it therefore came up empty on a
+    machine full of models - you had to go and load one by hand before you
+    could even pick it. LM Studio's native /api/v1/models always answers the
+    whole catalogue, so that is what the list is built from. vLLM has no such
+    address and answers 404; the caller keeps the OpenAI list there.
+    """
+    root = _server_root(base_url)
+    req = urllib.request.Request(root + "/api/v1/models", method="GET")
+    if api_key and api_key.strip():
+        req.add_header("Authorization", "Bearer " + api_key.strip())
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    out = []
+    for m in (data.get("models") if isinstance(data, dict) else None) or []:
+        key = str(m.get("key") or "").strip()
+        if key:
+            out.append(key)
+    return out
+
+
+def _merge_models(served, catalogue):
+    """The served ones first - they cost no load time - then the rest on disk."""
+    out, seen = [], set()
+    for m in list(served or []) + list(catalogue or []):
+        low = str(m).strip().lower()
+        if low and low not in seen:
+            seen.add(low)
+            out.append(m)
+    return out
+
+
 def _pick_chat_model(models):
     """Pick the first model that does not look like a text-encoder/embedding."""
     if not models:
@@ -615,6 +651,18 @@ def _carried_error(result) -> str:
     if isinstance(err, dict):
         err = err.get("message") or json.dumps(err)
     return str(err)
+
+
+# What a server says when the model exists but is not in memory. LM Studio
+# answers 404 with this wording; the phrases are matched rather than the code
+# alone so a 404 from a wrong base_url is not mistaken for a model to load.
+_UNLOADED_HINTS = ("model_not_found", "no models loaded", "is not loaded",
+                   "not loaded", "model not found", "no model loaded")
+
+
+def _looks_unloaded(err: str) -> bool:
+    low = (err or "").lower()
+    return "404" in low and any(h in low for h in _UNLOADED_HINTS)
 
 
 def _post_chat(url: str, payload: dict, api_key: str, timeout: int):
@@ -969,11 +1017,12 @@ class LLMPromptStudio:
                 # (text-encoder / embedding models are skipped).
                 "model": ("STRING", {
                     "default": "",
-                    "tooltip": "Dropdown of the models served at the address, chat "
-                               "ones on top. '(auto)' uses whichever chat model is "
-                               "loaded there - that is the setting to leave alone. "
-                               "'type a name' forces one the address does not list "
-                               "yet. 🔄 re-reads the list.",
+                    "tooltip": "Every model on the server, loaded or not, chat "
+                               "ones on top: pick another and it is loaded on the "
+                               "next run. '(auto)' uses whichever chat model is "
+                               "already loaded there - the setting to leave alone. "
+                               "'type a name' takes anything the list does not "
+                               "have. 🔄 re-reads the list.",
                 }),
                 # --- target model preset ---
                 "target_model": (TEMPLATE_ORDER, {
@@ -1359,6 +1408,17 @@ class LLMPromptStudio:
         # 7) call the server, retrying once without the extension fields
         try:
             result, err = _post_chat(url, payload, api_key, timeout)
+            # The list to pick from holds every model on disk, so the pick may
+            # well be one that is not in memory - and a server with
+            # just-in-time loading off answers 404 rather than loading it.
+            # Load it once and ask again; _load_model returns immediately if
+            # the model turns out to be there after all.
+            if err and _looks_unloaded(err):
+                print("[LLMPromptStudio] '%s' is not in memory; loading it and "
+                      "asking again" % resolved_model)
+                _load_model(base_url, api_key, resolved_model,
+                            max(int(timeout), 300), ctx_len, ctx_slots)
+                result, err = _post_chat(url, payload, api_key, timeout)
             if err:
                 print(err)
                 return _ui_result(err, err)

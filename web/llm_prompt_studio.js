@@ -84,6 +84,7 @@ function normalizeModel(node) {
     if (!w) return;
     const cur = String(w.value ?? "").trim();
     if (!cur || cur === PICK_TYPE) w.value = PICK_AUTO;
+    w._last = w.value;
     w.options = w.options || {};
     w.options.values = modelValues(node, w.options.values?.filter(
         (v) => v !== PICK_AUTO && v !== PICK_TYPE) || []);
@@ -99,24 +100,37 @@ function swapModelToCombo(node) {
             "model",
             String(old.value ?? "").trim() || PICK_AUTO,
             (v) => {
-                if (v !== PICK_TYPE) return;
-                // The escape hatch: a model the address does not list yet.
-                const typed = window.prompt(
-                    "Model name to force (empty = use the loaded model):",
-                    ""
-                );
-                const name = (typed || "").trim();
-                combo.value = name || PICK_AUTO;
-                if (name && !combo.options.values.includes(name)) {
-                    combo.options.values.splice(
-                        combo.options.values.length - 1, 0, name);
+                if (v !== PICK_TYPE) {
+                    combo._last = v;
+                    return;
                 }
+                // Typing a name by hand, for a model the address does not list
+                // - or does not list yet. Picking the entry has already
+                // overwritten the value, so what goes in the box is the name
+                // remembered from the previous pick: it is edited, not retyped.
+                const typed = window.prompt(
+                    "Model name (leave empty to go back to auto):",
+                    combo._last && combo._last !== PICK_AUTO ? combo._last : ""
+                );
+                if (typed === null) {
+                    combo.value = combo._last || PICK_AUTO;  // cancelled
+                } else {
+                    const name = typed.trim();
+                    combo.value = name || PICK_AUTO;
+                    // Above the 'type a name' entry, so it stays the last one.
+                    if (name && !combo.options.values.includes(name)) {
+                        combo.options.values.splice(
+                            combo.options.values.length - 1, 0, name);
+                    }
+                }
+                combo._last = combo.value;
                 app.graph.setDirtyCanvas(true, true);
             },
             { values: [PICK_AUTO, PICK_TYPE], tooltip: old.options?.tooltip }
         );
         node.widgets.pop();              // addWidget appends; we want the old slot
         node.widgets.splice(i, 1, combo);
+        combo._last = combo.value;
         old.onRemove?.();
         return combo;
     } catch (e) {
@@ -156,6 +170,7 @@ async function detectModel(node, select = false) {
     const pick = data.suggested || served[0];
     if (select && pick) w.value = pick;
     else if (!w.options.values.includes(w.value)) w.value = PICK_AUTO;
+    w._last = w.value;
     app.graph.setDirtyCanvas(true, true);
 }
 

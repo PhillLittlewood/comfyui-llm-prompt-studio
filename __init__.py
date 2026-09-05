@@ -17,7 +17,9 @@ from .nodes import (
     NODE_CLASS_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS,
     _chat_models_first,
+    _downloaded_models,
     _list_models,
+    _merge_models,
     _pick_chat_model,
 )
 from .prompt_templates import TEMPLATES, LEGACY_NAMES
@@ -52,17 +54,32 @@ try:
     async def _route_models(request):
         base_url = request.query.get("base_url", "http://localhost:1234/v1")
         api_key = request.query.get("api_key", "")
-        try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            models = await loop.run_in_executor(None, _list_models, base_url, api_key)
-            suggested = _pick_chat_model(models)
-            # Chat models on top: the dropdown is read top-down and an encoder
-            # is never an answer to "which model writes my prompt".
-            return web.json_response({"models": _chat_models_first(models),
-                                      "suggested": suggested})
-        except Exception as e:
-            return web.json_response({"models": [], "suggested": None, "error": str(e)})
+        import asyncio
+        loop = asyncio.get_event_loop()
+
+        async def _call(fn):
+            """Either half may be missing: vLLM has no native API, and a dead
+            address has neither. One answer is enough to fill the list."""
+            try:
+                return await loop.run_in_executor(None, fn, base_url, api_key), None
+            except Exception as e:
+                return [], str(e)
+
+        # What the address serves right now, plus everything else it holds on
+        # disk - picking a model you have but have not loaded is the point.
+        served, served_err = await _call(_list_models)
+        catalogue, cat_err = await _call(_downloaded_models)
+        models = _merge_models(served, catalogue)
+        if not models:
+            return web.json_response({"models": [], "suggested": None,
+                                      "error": served_err or cat_err or "no model listed"})
+        # Chat models on top: the dropdown is read top-down and an encoder is
+        # never an answer to "which model writes my prompt". The suggestion
+        # stays a served one, since that is what an empty field resolves to.
+        return web.json_response({
+            "models": _chat_models_first(models),
+            "suggested": _pick_chat_model(served) or _pick_chat_model(models),
+        })
 
     @routes.get("/llm_prompt_studio/templates")
     async def _route_templates(request):
