@@ -1068,7 +1068,7 @@ class LLMPromptStudio:
                     "tooltip": "Penalises tokens already produced. 1.0 = neutral and "
                                "nothing is sent; enable_repeat_penalty (bottom of the "
                                "node) switches it off without touching this value."}),
-                "max_tokens": ("INT", {"default": 1024, "min": 16, "max": 32768}),
+                "max_tokens": ("INT", {"default": 2048, "min": 16, "max": 32768}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff,
                                  "control_after_generate": True}),
                 # --- thinking / reasoning ---
