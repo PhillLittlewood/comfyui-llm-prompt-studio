@@ -8,8 +8,8 @@ Features
 - OpenAI-compatible /chat/completions (works with LM Studio and vLLM).
 - Two text boxes: a system prompt ("LLM card") and a chat/user message.
 - Target-model dropdown with editable, pre-filled English prompt templates
-  (Anima, Illustrious, SDXL, FLUX.2 Klein, FLUX Krea, Ideogram, LTX, Wan,
-  MiniMax H3...).
+  (Anima, Illustrious, SDXL, Qwen-Image 2.1 text-to-image and edit, FLUX.2
+  Klein, FLUX Krea, Ideogram, LTX, Wan, MiniMax H3...).
 - Sampling controls: temperature, top_p, top_k, repeat penalty, max tokens, seed.
 - Thinking control (auto / off / on, plus the low..xhigh reasoning-effort levels
   Qwen3.8-Flash-Next added) tuned for Qwen3.x; Gemma-safe, with a real "no think"
@@ -17,8 +17,10 @@ Features
 - Custom "cut tag": everything up to AND including the tag is removed from the
   output (great for stripping a model's </think> reasoning block).
 - Optional conversation memory (multi-turn) with a reset toggle.
-- Up to 8 image inputs for vision models, announced to the LLM as <Picture 1>,
-  <Picture 2>... in input order - the reference labels MiniMax H3 itself uses.
+- As many image inputs as you connect: filling the last socket grows a fresh
+  empty one. They are announced to the LLM as <Picture 1>, <Picture 2>... in
+  input order - the reference labels MiniMax H3 itself uses, and what the
+  Qwen-Image 2.1 edit card rewrites into <image1>, <image2>...
 - A video input sampled into frames (1 out of N, capped, spread over the whole
   clip) so the model describes a video it has actually seen, plus audio/video
   role widgets declaring what each asset is FOR when it cannot be shown.
@@ -30,6 +32,7 @@ Features
 import base64
 import io
 import json
+import re
 import traceback
 import urllib.error
 import urllib.request
@@ -218,10 +221,72 @@ def _has_think_trigger(model: str) -> bool:
     return True
 
 
-# How many images the node can take. Each connected socket becomes one picture,
-# announced to the LLM as <Picture N> following the socket order - the reference
-# label MiniMax H3 uses in its own prompt format.
+# How many image sockets the node ADVERTISES. Each connected socket becomes one
+# picture, announced to the LLM as <Picture N> following the socket order - the
+# reference label MiniMax H3 uses in its own prompt format.
+#
+# It is a starting pool, not a ceiling: the front-end adds a fresh empty socket
+# every time the last one is filled, and _PictureSlots below makes the server
+# accept the names it invents. Eight is simply what a node opened without the JS
+# extension (or with /object_info as its only source of truth) still offers.
 MAX_PICTURES = 8
+
+_PICTURE_NAME = re.compile(r"^image_(\d+)$")
+
+
+def _picture_slot(name) -> int:
+    """The socket number behind an input name, or 0 when it is not a picture.
+
+    "image" is picture 1; "image_7" is picture 7. Slot 1 has no suffix because
+    that is the name the node shipped with, and a saved workflow still carries it.
+    """
+    if name == "image":
+        return 1
+    m = _PICTURE_NAME.match(name or "")
+    n = int(m.group(1)) if m else 0
+    return n if n >= 2 else 0
+
+
+def _picture_socket(n: int):
+    """The input declaration for picture ``n``."""
+    return ("IMAGE", {
+        "tooltip": "Extra reference image. Connected images are numbered in "
+                   "socket order, so this one reaches the LLM as <Picture %d> "
+                   "when every socket above it is used too. Filling the last "
+                   "socket adds another one." % n})
+
+
+class _PictureSlots(dict):
+    """The optional-input dict, which answers to picture sockets it never lists.
+
+    ComfyUI resolves an input by ``name in INPUT_TYPES()["optional"]``
+    (comfy_execution/graph.py, get_input_info) and silently DROPS whatever it
+    cannot resolve - so a socket the front-end added past the advertised pool
+    would reach generate() as nothing at all, and the image wired into it would
+    vanish without a word.
+
+    Only the lookups grow. Iteration stays finite - the eight declared sockets
+    plus the rest of the block - because that is what /object_info serializes
+    for the front-end and what validate_inputs walks; an endless dict there
+    would hang the server rather than help it.
+    """
+
+    def __contains__(self, key):
+        return dict.__contains__(self, key) or bool(_picture_slot(key))
+
+    def __getitem__(self, key):
+        if dict.__contains__(self, key):
+            return dict.__getitem__(self, key)
+        n = _picture_slot(key)
+        if not n:
+            raise KeyError(key)
+        return _picture_socket(n)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
 # What a connected audio is FOR. The names are MiniMax H3's own relationship
 # markers: the node cannot listen to the track, but it can state the role, which
@@ -1126,7 +1191,10 @@ class LLMPromptStudio:
                     "tooltip": "API key if required (LM Studio: any value; vLLM: your "
                                "--api-key). Leave default if none."}),
                 "image": ("IMAGE", {"tooltip": "Optional image for vision models. The "
-                                               "LLM is told this one is <Picture 1>."}),
+                                               "LLM is told this one is <Picture 1>. "
+                                               "Filling it grows a second socket, and "
+                                               "so on: there is no fixed number of "
+                                               "reference images."}),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
@@ -1136,10 +1204,7 @@ class LLMPromptStudio:
         # widgets_values and cannot shift a saved workflow.
         optional = spec["optional"]
         for i in range(2, MAX_PICTURES + 1):
-            optional["image_%d" % i] = ("IMAGE", {
-                "tooltip": "Extra reference image. Connected images are numbered in "
-                           "socket order, so this one reaches the LLM as <Picture %d> "
-                           "when every socket above it is used too." % i})
+            optional["image_%d" % i] = _picture_socket(i)
         optional["audio"] = ("AUDIO", {
             "tooltip": "Optional audio reference. Connecting it tells the LLM that "
                        "an audio signal exists and is labelled <Audio 1>; what it "
@@ -1244,6 +1309,9 @@ class LLMPromptStudio:
                        "sends one request at a time, so 1 divides the reservation "
                        "by whatever LM Studio had picked - by 4, with its usual "
                        "default. Works on its own or next to context_length."})
+        # Last: the picture sockets the front-end adds beyond the advertised
+        # pool are resolved by this dict, not by the block above.
+        spec["optional"] = _PictureSlots(spec["optional"])
         return spec
 
     # Always re-run when the seed changes (control_after_generate); fixed seed = cached.
@@ -1269,7 +1337,12 @@ class LLMPromptStudio:
         #    system prompt has to state, otherwise the model reads <Picture 3> in
         #    a card's example and cites a picture that was never sent. Same idea
         #    for the video, except the fact to state is how much of it was seen.
-        slots = [image] + [pictures.get("image_%d" % i) for i in range(2, MAX_PICTURES + 1)]
+        #    The sockets past the first are read by name rather than counted:
+        #    the front-end keeps adding them, so there is no highest number to
+        #    stop at - only the ones that actually arrived, in socket order.
+        extra = sorted(((_picture_slot(k), v) for k, v in pictures.items()
+                        if _picture_slot(k)), key=lambda kv: kv[0])
+        slots = [image] + [v for _, v in extra]
         picture_urls = _collect_pictures(slots, image_analysis_size)
         frames, frame_total = _collect_video_frames(
             video, video_stride, video_max_frames, video_frame_size, video_fps)

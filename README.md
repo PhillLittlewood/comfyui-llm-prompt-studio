@@ -5,7 +5,9 @@ A ComfyUI custom node that connects to a **local OpenAI-compatible LLM server**
 specific image / video generator**.
 
 It ships with editable, ready-to-use prompt "cards" for:
-**Anima base v1**, **Illustrious**, **SDXL**, **FLUX.2 Klein (9B)**,
+**Anima base v1**, **Illustrious**, **SDXL**,
+**Qwen-Image 2.1** (two cards: *text to image* and *edit / i2i*),
+**FLUX.2 Klein (9B)**,
 **Krea 2 (Krea AI)**, **Ideogram**, **LTX-2 / LTX 2.3**, **Wan 2.2**,
 **MiniMax H3 / Hailuo 3** (three cards: *normal*, *ref* and *edit*), plus a
 generic preset.
@@ -66,14 +68,24 @@ generic preset.
 - **Conversation memory**: `keep_history` for multi-turn chat,
   `max_history_turns` to set how many past turns are remembered (context depth),
   and `reset_history` to clear it.
-- **Up to 8 image inputs**: `image`, `image_2` … `image_8`. Each connected
-  socket is announced to the LLM as **`<Picture 1>`, `<Picture 2>`…** following
-  the socket order, and the label is sent **just before its own image** so the
-  model binds the two. Empty sockets are skipped, so `image` + `image_3` still
-  gives you `<Picture 1>` and `<Picture 2>` — never a gap. `<Picture N>` is
-  MiniMax H3's own reference label, so the H3 cards can cite an exact image
-  instead of "the second one"; any vision model reads it just as well.
-  These are link sockets, not widgets, so they can't shift a saved workflow.
+- **As many image inputs as you connect**: the node shows `image` and grows a
+  fresh empty socket (`image_2`, `image_3`, …) the moment the last one is
+  filled, so you are never capped — unwiring the bottom ones takes the spares
+  away again. Each connected socket is announced to the LLM as **`<Picture 1>`,
+  `<Picture 2>`…** following the socket order, and the label is sent **just
+  before its own image** so the model binds the two. Empty sockets are skipped,
+  so `image` + `image_3` still gives you `<Picture 1>` and `<Picture 2>` —
+  never a gap. `<Picture N>` is MiniMax H3's own reference label, so the H3
+  cards can cite an exact image instead of "the second one"; the Qwen-Image 2.1
+  edit card rewrites it into Qwen's own `<image1>` syntax, and any vision model
+  reads it just as well. These are link sockets, not widgets, so they can't
+  shift a saved workflow.
+  <br>Eight sockets are declared server-side so the node still works with the
+  front-end extension disabled; past those, the sockets the UI adds are
+  resolved by name (`_PictureSlots` in `nodes.py`), which is what keeps an
+  image wired into `image_23` from being silently dropped.
+  <br>Note that **Qwen-Image 2.1 itself reads up to 10 reference images** — the
+  node will happily send more, but the image model is the limit that counts.
 - **No invented pictures**: the node counts the connected sockets and states it
   in the system prompt at request time — *"exactly 2 pictures are connected,
   labelled `<Picture 1>`, `<Picture 2>` … never cite `<Picture 3>`"*, or *"no
@@ -519,6 +531,19 @@ servers whose model names don't contain "deepseek".
 - Illustrious-XL — Danbooru-tag conventions, `masterpiece, best quality`,
   **no** Pony `score_9` tags.
 - SDXL — natural language + light tags, SDXL-safe weights, `BREAK`.
+- Qwen-Image 2.1 (both cards) — Qwen's **own prompt-rewriting checkpoints**
+  (`Qwen-Image-2.1-PE-T2I` and `-PE-I2I`), whose system prompts ship in
+  [QwenLM/Qwen-Image-2.1 → `prompt_rewrite/prompts/`](https://github.com/QwenLM/Qwen-Image-2.1/tree/main/prompt_rewrite/prompts).
+  The model was trained on what those rewriters emit, so their house style *is*
+  the prompt format: for text-to-image, one ~20-sentence English paragraph
+  describing the finished frame as an observer, with positional phrases and
+  every readable string quoted literally; for editing, one continuous directive
+  built on attribute disentanglement (edit exactly what was named, at full
+  strength, everything else held at input fidelity) that cites reference
+  pictures as **`<image1>`, `<image2>`…** — mandatory from two images on, and
+  forbidden with a single one. The rewriters' JSON envelope
+  (`wh_ratio` / `ratio_follow`) is dropped on purpose: in ComfyUI the aspect
+  ratio is the latent's job, not prompt text.
 - FLUX.2 [klein] (9B) — Black Forest Labs FLUX.2 prompting guide (natural
   language, 40–120 words, no weight syntax).
 - Krea 2 (Krea AI) — Krea's own foundation model: aesthetic-first, art-directed

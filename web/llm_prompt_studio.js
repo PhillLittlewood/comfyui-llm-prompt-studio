@@ -288,6 +288,101 @@ function readonlyBox(node, name) {
     return w;
 }
 
+// ------------------------------------------------------- growing image slots
+// The node declares eight picture sockets (nodes.py, MAX_PICTURES) so it still
+// works without this file, but eight is a pool, not a ceiling: here the node
+// shows exactly ONE empty socket after the last filled one, and grows another
+// the moment that one is taken. The backend resolves any image_N it is sent
+// (_PictureSlots in nodes.py), so the numbering may run as high as you connect.
+//
+// Socket 1 is named "image", not "image_1": that is the name the node shipped
+// with, and a workflow saved before this change still carries it.
+const PICTURE_RE = /^image(?:_(\d+))?$/;
+
+function pictureIndex(name) {
+    const m = PICTURE_RE.exec(name || "");
+    if (!m) return 0;
+    return m[1] ? parseInt(m[1], 10) : 1;
+}
+
+function pictureTooltip(n) {
+    return (
+        "Extra reference image. Connected images are numbered in socket order, " +
+        "so this one reaches the LLM as <Picture " + n + "> when every socket " +
+        "above it is used too. Filling it grows another socket."
+    );
+}
+
+// A link remembers which input index it lands on. Reordering or removing inputs
+// moves those indices, so every link is re-stamped afterwards - otherwise the
+// wire stays drawn on the socket it used to sit on.
+function reindexInputLinks(node) {
+    const links = node.graph?.links;
+    if (!links) return;
+    node.inputs.forEach((inp, i) => {
+        if (inp?.link == null) return;
+        const l = typeof links.get === "function" ? links.get(inp.link) : links[inp.link];
+        if (l) l.target_slot = i;
+    });
+}
+
+// addInput() appends at the very bottom, which would leave image_9 sitting
+// under `audio` and `video`. The picture sockets are put back together where
+// the block already starts.
+function orderPictureSlots(node) {
+    const inputs = node.inputs || [];
+    const pics = [];
+    const rest = [];
+    let at = -1;
+    for (const inp of inputs) {
+        if (pictureIndex(inp.name)) {
+            if (at < 0) at = rest.length;
+            pics.push(inp);
+        } else {
+            rest.push(inp);
+        }
+    }
+    if (at < 0 || pics.length < 2) return;
+    pics.sort((a, b) => pictureIndex(a.name) - pictureIndex(b.name));
+    const ordered = rest.slice(0, at).concat(pics, rest.slice(at));
+    if (ordered.every((inp, i) => inp === inputs[i])) return;
+    inputs.length = 0;
+    inputs.push(...ordered);
+    reindexInputLinks(node);
+}
+
+function syncPictureSlots(node) {
+    try {
+        if (!node.inputs) return;
+        let filled = 0;
+        for (const inp of node.inputs) {
+            const n = pictureIndex(inp.name);
+            if (n && inp.link != null) filled = Math.max(filled, n);
+        }
+        // One free socket after the last filled one, and not one more.
+        const want = filled + 1;
+
+        // Trailing empties go, from the bottom up so the indices stay valid.
+        // A hole in the middle stays: the node numbers the pictures by the
+        // sockets that carry one, so image + image_3 is still <Picture 1> and
+        // <Picture 2>, and removing the gap would move a wire the user made.
+        for (let i = node.inputs.length - 1; i >= 0; i--) {
+            const n = pictureIndex(node.inputs[i].name);
+            if (n > 1 && n > want && node.inputs[i].link == null) node.removeInput(i);
+        }
+
+        let highest = 0;
+        for (const inp of node.inputs) highest = Math.max(highest, pictureIndex(inp.name));
+        for (let n = highest + 1; n <= want; n++) {
+            node.addInput("image_" + n, "IMAGE", { tooltip: pictureTooltip(n) });
+        }
+        orderPictureSlots(node);
+        app.graph?.setDirtyCanvas(true, true);
+    } catch (e) {
+        console.warn("[coco] could not grow the image slots:", e);
+    }
+}
+
 app.registerExtension({
     name: "comfy.LLMPromptStudio",
     async setup() {
@@ -412,9 +507,37 @@ app.registerExtension({
                 detectModel(node);
                 // After configure(), so a saved workflow's box heights are back.
                 makeAllResizable(node);
+                // Same reason: a workflow using image_6 must have its wires
+                // restored before the empty sockets around them are trimmed.
+                syncPictureSlots(node);
             }, 250);
 
             return ret;
+        };
+
+        // Connecting the last empty picture socket grows the next one;
+        // unwiring the bottom ones takes the spares away again.
+        const onConnectionsChange = nodeType.prototype.onConnectionsChange;
+        nodeType.prototype.onConnectionsChange = function (type, index, connected, link_info) {
+            const r = onConnectionsChange?.apply(this, arguments);
+            // LiteGraph.INPUT === 1. While the graph is still being rebuilt the
+            // links are half restored, so counting sockets then would trim the
+            // ones a wire is about to land on.
+            if (type === 1 && !app.configuringGraph) {
+                const node = this;
+                setTimeout(() => syncPictureSlots(node), 0);
+            }
+            return r;
+        };
+
+        // A workflow loaded from disk goes through configure(), not through the
+        // creation path above when the node already exists in the graph data.
+        const onConfigure = nodeType.prototype.onConfigure;
+        nodeType.prototype.onConfigure = function () {
+            const r = onConfigure?.apply(this, arguments);
+            const node = this;
+            setTimeout(() => syncPictureSlots(node), 300);
+            return r;
         };
 
         // Show the generated prompt (cleaned, no thinking) on the node itself.
