@@ -563,6 +563,13 @@ servers whose model names don't contain "deepseek".
   forbidden with a single one. The rewriters' JSON envelope
   (`wh_ratio` / `ratio_follow`) is dropped on purpose: in ComfyUI the aspect
   ratio is the latent's job, not prompt text.
+  Two rules go **beyond** Qwen's own text: the prompt is always written in
+  English (Qwen answers a Chinese instruction in Chinese), and the edit card
+  spells out that an edit to what *covers* a subject never changes the subject
+  underneath — a new outfit keeps the body's proportions exactly as they are,
+  no part excepted, along with the pose and framing. Qwen states the principle
+  (attribute disentanglement) but leaves the body implicit, and an image model
+  asked for clothes will slim a waist on the way out.
 - FLUX.2 [klein] (9B) — Black Forest Labs FLUX.2 prompting guide (natural
   language, 40–120 words, no weight syntax).
 - Krea 2 (Krea AI) — Krea's own foundation model: aesthetic-first, art-directed
