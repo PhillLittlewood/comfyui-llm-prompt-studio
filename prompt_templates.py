@@ -56,8 +56,8 @@ TEMPLATES = {
         "tags or short phrases.\n"
         "Stay coherent and do not invent characters the user did not ask for. Anima is "
         "anime / illustration only - never request photorealism.\n"
-        "Use weighting like (tag:1.3) only when emphasis is clearly needed. Return a "
-        "single line."
+        "Use weighting like (tag:1.3) only when emphasis is clearly needed. Write the "
+        "prompt in English whatever language the user wrote in. Return a single line."
     ),
     "Illustrious": (
         "You convert the user's idea into ONE optimized text-to-image prompt for the "
@@ -78,8 +78,9 @@ TEMPLATES = {
         "implies one; otherwise describe with generic appearance tags.\n"
         "Avoid stacking conflicting composition tags (close-up, cowboy shot, upside-down) "
         "together.\n"
-        "Keep it under ~220 tokens and front-load the most important tags. Return a "
-        "single comma-separated line."
+        "Keep it under ~220 tokens and front-load the most important tags. Write the "
+        "prompt in English whatever language the user wrote in. Return a single "
+        "comma-separated line."
     ),
     # ------------------------------------------------------------------ SDXL
     "SDXL": (
@@ -257,8 +258,8 @@ TEMPLATES = {
         "(1) the user gave the exact words, or named a language for them - use "
         "exactly that; (2) otherwise, if the input image already contains text - use "
         "the dominant language of that text, even when the user wrote to you in "
-        "another one; (3) otherwise - use the language the user wrote in, including "
-        "French, Japanese, Korean, Thai or Arabic. Do NOT force it to English. "
+        "another one; (3) otherwise - English, whatever language the user wrote to "
+        "you in. "
         "Rendered text is monolingual: never mix two languages inside the quotes and "
         "never add a translation gloss unless the user asked for one. A spec-sheet, "
         "storyboard or technical look is achieved through layout and typography, "
@@ -267,8 +268,9 @@ TEMPLATES = {
         "picture, and write from the point of view of someone holding only the "
         "connected pictures. State requirements affirmatively (\"keep the "
         "background exactly as in <image1>\") rather than as prohibitions. Write the "
-        "directive in English unless the user wrote in Chinese, in which case write "
-        "it in Chinese. Never put a resolution or an aspect ratio in the text - the "
+        "directive in ENGLISH whatever language the user wrote in - only the text "
+        "rendered inside the image may be in another language, and that is decided "
+        "above. Never put a resolution or an aspect ratio in the text - the "
         "ratio is the latent's job in ComfyUI. Write the directive out in full - no "
         "ellipsis, no truncation, nothing left as \"etc.\". Return ONE continuous "
         "paragraph with no line breaks."

@@ -1118,9 +1118,13 @@ class LLMPromptStudio:
                     "tooltip": "Your message / idea (the chat box).",
                 }),
                 # --- sampling ---
-                "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.01}),
-                "top_p": ("FLOAT", {"default": 0.9, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "top_k": ("INT", {"default": 40, "min": 0, "max": 1000}),
+                "temperature": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01,
+                    "tooltip": "1.0 is what Qwen runs its own prompt-rewriting "
+                               "checkpoints at, and what Qwen3 publishes for "
+                               "writing. Lower it towards 0.6 for a card that "
+                               "must follow a rigid format to the letter."}),
+                "top_p": ("FLOAT", {"default": 0.95, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "top_k": ("INT", {"default": 20, "min": 0, "max": 1000}),
                 "min_p": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
                     "tooltip": "Min-p sampling: drops tokens below this fraction of the "
                                "top token's probability. 0 = disabled. Try 0.05-0.1 and "
@@ -1129,11 +1133,20 @@ class LLMPromptStudio:
                                "/ n-gram): it answers 400 and generates nothing. Turn "
                                "enable_min_p off there (it keeps your value) and filter "
                                "with top_p / top_k instead."}),
-                "repeat_penalty": ("FLOAT", {"default": 1.1, "min": 0.0, "max": 2.0, "step": 0.01,
+                "repeat_penalty": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01,
                     "tooltip": "Penalises tokens already produced. 1.0 = neutral and "
                                "nothing is sent; enable_repeat_penalty (bottom of the "
-                               "node) switches it off without touching this value."}),
-                "max_tokens": ("INT", {"default": 1024, "min": 16, "max": 32768}),
+                               "node) switches it off without touching this value. "
+                               "Neutral is the default because a prompt card asks for "
+                               "its own vocabulary repeatedly (positional phrases, a "
+                               "fixed closing sentence), and penalising that walks the "
+                               "model off the format halfway through."}),
+                "max_tokens": ("INT", {"default": 4096, "min": 16, "max": 32768,
+                    "tooltip": "Ceiling on the answer, THINKING INCLUDED. A long card "
+                               "(Qwen-Image 2.1 asks for 400-500 words, MiniMax H3 for "
+                               "a whole structured block) plus a reasoning block does "
+                               "not fit in 1024, and the prompt comes back cut off "
+                               "mid-sentence."}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff,
                                  "control_after_generate": True}),
                 # --- thinking / reasoning ---

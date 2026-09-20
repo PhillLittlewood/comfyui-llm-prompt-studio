@@ -41,7 +41,26 @@ generic preset.
 - **Sampling controls**: `temperature`, `top_p`, `top_k`, `min_p`,
   `repeat_penalty`, `seed` (with `control_after_generate`). `min_p` and the
   repetition penalty each have their own on/off switch.
-- **Output tokens**: `max_tokens` caps the length of the generated answer.
+  The defaults — `temperature 1.0`, `top_p 0.95`, `top_k 20`, `min_p 0`,
+  `repeat_penalty 1.0` (neutral, so nothing is sent) — are the production
+  settings Qwen publishes for its own prompt-rewriting checkpoints
+  ([`prompt_rewrite/README.md`](https://github.com/QwenLM/Qwen-Image-2.1/tree/main/prompt_rewrite)),
+  which are also Qwen3's published values for writing. The repetition penalty is
+  neutral on purpose: a prompt card asks for its own vocabulary over and over
+  (positional phrases, a fixed closing sentence), and penalising that walks the
+  model off the format halfway through. Qwen controls repetition with
+  `presence_penalty` instead — 1.5 for text-to-image, 0 for editing — which is
+  different math and not what `repeat_penalty` sends.
+- **Output tokens**: `max_tokens` caps the length of the generated answer,
+  **thinking included**. It defaults to 4096: a long card (Qwen-Image 2.1 asks
+  for 400–500 words, MiniMax H3 for a whole structured block) plus a reasoning
+  block does not fit in 1024, and the prompt comes back cut off mid-sentence.
+- **Always English**: every card writes the prompt in English whatever language
+  you type in — including the Qwen-Image 2.1 edit card, where Qwen's own rule
+  would answer a Chinese instruction in Chinese. Text *rendered inside the
+  image* is the one exception: it follows the words or the language you asked
+  for, or the language the input image already uses, and falls back to English
+  when you named neither.
 - **Thinking control** (`auto` / `off` / `on` / `on - low…xhigh effort`): `off`
   states "no thinking" in every dialect at once — `/no_think` +
   `enable_thinking=false` (**Qwen3.x**, GLM), `thinking=false` (**DeepSeek
