@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 LLM Prompt Studio - a ComfyUI node that talks to an OpenAI-compatible local
-server (LM Studio or vLLM) to turn your idea into an optimized image/video prompt.
+server (LM Studio or vLLM) to turn your idea into an optimized image, video or
+music prompt.
 
 Features
 --------
@@ -9,7 +10,8 @@ Features
 - Two text boxes: a system prompt ("LLM card") and a chat/user message.
 - Target-model dropdown with editable, pre-filled English prompt templates
   (Anima, Illustrious, SDXL, Qwen-Image 2.1 text-to-image and edit, FLUX.2
-  Klein, FLUX Krea, Ideogram, LTX, Wan, MiniMax H3...).
+  Klein, FLUX Krea, Ideogram, LTX, Wan, MiniMax H3, and style + lyrics cards
+  for ACE-Step 1.5 XL and YuE2...).
 - Sampling controls: temperature, top_p, top_k, repeat penalty, max tokens, seed.
 - Thinking control (auto / off / on, plus the low..xhigh reasoning-effort levels
   Qwen3.8-Flash-Next added) tuned for Qwen3.x; Gemma-safe, with a real "no think"

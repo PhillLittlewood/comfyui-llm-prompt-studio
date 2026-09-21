@@ -9,8 +9,9 @@ It ships with editable, ready-to-use prompt "cards" for:
 **Qwen-Image 2.1** (two cards: *text to image* and *edit / i2i*),
 **FLUX.2 Klein (9B)**,
 **Krea 2 (Krea AI)**, **Ideogram**, **LTX-2 / LTX 2.3**, **Wan 2.2**,
-**MiniMax H3 / Hailuo 3** (three cards: *normal*, *ref* and *edit*), plus a
-generic preset.
+**MiniMax H3 / Hailuo 3** (three cards: *normal*, *ref* and *edit*),
+**ACE-Step 1.5 XL** and **YuE2** (a *style* card and a *lyrics* card each, to
+wire into the music model's two separate inputs), plus a generic preset.
 
 ---
 
@@ -56,7 +57,8 @@ generic preset.
   for 400–500 words, MiniMax H3 for a whole structured block) plus a reasoning
   block does not fit in 1024, and the prompt comes back cut off mid-sentence.
 - **Always English**: every card writes the prompt in English whatever language
-  you type in — including the Qwen-Image 2.1 edit card, where Qwen's own rule
+  you type in — except the two *lyrics* cards, which write the words to be
+  sung and so follow the language you ask for — including the Qwen-Image 2.1 edit card, where Qwen's own rule
   would answer a Chinese instruction in Chinese. Text *rendered inside the
   image* is the one exception: it follows the words or the language you asked
   for, or the language the input image already uses, and falls back to English
@@ -578,6 +580,29 @@ servers whose model names don't contain "deepseek".
 - LTX-2 / LTX 2.3 — Lightricks LTX prompting guide (4–8 sentences,
   subject→action→camera→lighting, motion verbs).
 - Wan 2.2 — Wan prompting guides (subject→motion→camera→scene, front-loaded).
+- ACE-Step 1.5 XL (style + lyrics) — the official
+  [`docs/en/Tutorial.md`](https://github.com/ace-step/ACE-Step-1.5/blob/main/docs/en/Tutorial.md):
+  tags *or* natural language both work, "specific beats vague", and BPM, key,
+  time signature and duration stay **out** of the caption because the model has
+  dedicated inputs for them. The lyrics card follows the guide's structure tags
+  with a single descriptor after the hyphen (`[Chorus - anthemic]` — stacking
+  them confuses the model), 6–10 syllables a line within ±1–2 of its
+  neighbours, uppercase for intensity, (parentheses) for backing vocals, and
+  resolves clashing genres by repetition or by turning the clash into an
+  evolution over time.
+- YuE2 (style + lyrics) — the [ComfyUI YuE2 guide](https://docs.comfy.org/tutorials/audio/yue2/yue2)
+  and the model's own examples
+  ([`m-a-p/YuE2-3B`](https://huggingface.co/m-a-p/YuE2-3B)). The style card
+  defaults to a tag line but allows prose, and keeps the language tag and the
+  BPM optional — two of the three official example styles carry neither. The
+  lyrics card matches `examples/tonight-awake.json` exactly: plain labels with
+  no numbers or descriptors, `[Intro]` and `[Interlude]` allowed to stand
+  empty, the chorus written twice under a single `[Chorus]`, and Chinese lines
+  as two short phrases separated by a space with no punctuation.
+  The one rule the split design puts at risk is ACE-Step's caption/lyrics
+  consistency (*"if descriptions in Caption and Lyrics contradict, the model
+  gets confused"*): the lyrics cards only name an instrument the brief itself
+  named, since the two runs cannot see each other.
 - MiniMax H3 / Hailuo 3 — the **two official prompt-writing guides** shipped
   with the model
   ([MiniMaxAI/MiniMax-H3 → docs](https://huggingface.co/MiniMaxAI/MiniMax-H3/tree/main/docs)):

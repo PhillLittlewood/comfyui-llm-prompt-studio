@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Default "LLM cards" (system prompts) for each target image / video model.
+Default "LLM cards" (system prompts) for each target image / video / music model.
 
 Each template tells the LLM how to turn the user's free-form idea into ONE
 optimized prompt written the way that specific model expects.
@@ -834,7 +834,9 @@ TEMPLATES = {
         "- never several: stacked descriptors make the model sing the tag text or lose "
         "focus. Optional vocal cues, used sparingly: [whispered], [falsetto], [raspy "
         "vocal], [powerful belting], [spoken word], [harmonies], [call and response], "
-        "[ad-lib].\n"
+        "[ad-lib]. Energy and emotion cues, same restraint: [high energy], [low "
+        "energy], [building energy], [melancholic], [euphoric], [dreamy], "
+        "[aggressive].\n"
         "You do not see the music style, so keep the tags to structure, energy and "
         "vocal delivery. Name an instrument in a tag (\"[Guitar Solo]\") only if the "
         "user's brief names that instrument or genre; otherwise use \"[Instrumental]\" "
