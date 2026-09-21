@@ -2,7 +2,7 @@
 """
 ComfyUI - LLM Prompt Studio
 Connect to LM Studio or vLLM (OpenAI-compatible) and generate optimized
-image / video prompts from inside ComfyUI.
+image / video / music prompts from inside ComfyUI.
 """
 
 import json

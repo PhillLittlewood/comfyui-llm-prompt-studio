@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 LLM Prompt Studio - a ComfyUI node that talks to an OpenAI-compatible local
-server (LM Studio or vLLM) to turn your idea into an optimized image/video prompt.
+server (LM Studio or vLLM) to turn your idea into an optimized image / video / music prompt.
 
 Features
 --------
@@ -947,7 +947,7 @@ def _picture_manifest(count: int) -> str:
 def _audio_manifest(connected: bool, role: str) -> str:
     """State that an audio reference exists and what it is for.
 
-    Returns "" when there is nothing to declare, so the nine non-video cards
+    Returns "" when there is nothing to declare, so the non-video cards
     never carry a paragraph about a track that does not exist. The negative case
     needs no line: <Audio N> only lives in the full-reference card, which already
     says the label exists solely when the user provides such a source.
@@ -996,7 +996,7 @@ def _strip_before_tags(text: str, tags_csv: str) -> str:
 
 
 class LLMPromptStudio:
-    """Generate image/video prompts with a local OpenAI-compatible LLM."""
+    """Generate image / video / music prompts with a local OpenAI-compatible LLM."""
 
     CATEGORY = "LLM Prompt Studio"
     FUNCTION = "generate"

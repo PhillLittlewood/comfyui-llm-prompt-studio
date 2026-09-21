@@ -98,7 +98,7 @@ generic preset.
   which is what you want when the track reaches the video model further down the
   graph. Leave the role on `none` but connect the socket and the LLM is told to
   infer the role from your request. With neither, not a word about audio is
-  added — the nine non-video cards stay clean.
+  added — the non-video cards stay clean.
 - **Video input** (`video` socket + the `video_*` widgets): connect the `IMAGE`
   batch a video loader outputs and the node **samples frames out of it** and
   shows them to the vision model, labelled `<Video 1> frame 3 of 8`. That is the

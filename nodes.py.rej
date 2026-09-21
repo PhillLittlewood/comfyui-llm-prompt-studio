@@ -1,0 +1,11 @@
+diff a/nodes.py b/nodes.py	(rejected hunks)
+@@ -9,7 +9,8 @@ Features
+ - Two text boxes: a system prompt ("LLM card") and a chat/user message.
+ - Target-model dropdown with editable, pre-filled English prompt templates
+   (Anima, Illustrious, SDXL, Qwen-Image 2.1 text-to-image and edit, FLUX.2
+-  Klein, FLUX Krea, Ideogram, LTX, Wan, MiniMax H3...).
++  Klein, FLUX Krea, Ideogram, LTX, Wan, MiniMax H3, ACE-Step 1.5 XL and YuE2
++  (music style and lyrics)...).
+ - Sampling controls: temperature, top_p, top_k, repeat penalty, max tokens, seed.
+ - Thinking control (auto / off / on, plus the low..xhigh reasoning-effort levels
+   Qwen3.8-Flash-Next added) tuned for Qwen3.x; Gemma-safe, with a real "no think"
