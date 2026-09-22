@@ -205,6 +205,21 @@ wire into the music model's two separate inputs), plus a generic preset.
   reservation for nothing) is what stops it. The size is **fixed when the model
   loads**, so a copy already in memory at another size is unloaded and loaded
   again — the node says so in the console.
+- **Server status dot + `on_llm_offline`**: a dot at the right of the node's
+  title is **green** when the LLM answers at `base_url`, **red** when it does
+  not (checked every 10 s, grey until the first check). When a run finds the
+  server off, the workflow no longer gets an error text as its prompt:
+  - `reuse last prompt` (default): sends the last prompt this node wrote for
+    this target model. It is saved in `last_prompts.json`, so it survives a
+    ComfyUI restart. On a node that has never produced one, the run stops.
+  - `pass user_prompt through`: sends your `user_prompt` as typed, for when it
+    is already a prompt that the LLM only improves.
+  - `stop with an error`: the run stops.
+
+  Either way a warning toast pops up, the on-node preview starts with
+  `⚠ LLM OFFLINE`, and `raw_response` says why. A fixed seed does not keep the
+  stand-in cached: the node runs again on the next queue. A server that is up
+  but too slow (`timeout`) is still an error, not an offline server.
 
 Outputs:
 - `prompt` – the cleaned text (after the cut tag, **no thinking**). It is a

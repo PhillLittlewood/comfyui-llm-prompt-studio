@@ -21,6 +21,7 @@ from .nodes import (
     _list_models,
     _merge_models,
     _pick_chat_model,
+    _server_reachable,
 )
 from .prompt_templates import TEMPLATES, LEGACY_NAMES
 from .text_preview import (
@@ -43,6 +44,7 @@ __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 # Server routes used by the front-end JS:
 #   GET /llm_prompt_studio/models?base_url=...&api_key=...   -> { "models": [...] }
 #   GET /llm_prompt_studio/templates                          -> { name: template }
+#   GET /llm_prompt_studio/status?base_url=...&api_key=...   -> { "online": bool }
 # --------------------------------------------------------------------------
 try:
     import server  # ComfyUI's PromptServer module
@@ -90,6 +92,17 @@ try:
         payload.update({old: TEMPLATES[new] for old, new in LEGACY_NAMES.items()
                         if new in TEMPLATES})
         return web.json_response(payload)
+
+    @routes.get("/llm_prompt_studio/status")
+    async def _route_status(request):
+        # Feeds the dot on the node's title. Short timeout: it is polled.
+        base_url = request.query.get("base_url", "http://localhost:1234/v1")
+        api_key = request.query.get("api_key", "")
+        import asyncio
+        loop = asyncio.get_event_loop()
+        up, why = await loop.run_in_executor(
+            None, _server_reachable, base_url, api_key, 3)
+        return web.json_response({"online": up, "error": why})
 
     print("[LLM Prompt Studio] routes registered.")
 

@@ -34,7 +34,9 @@ Features
 import base64
 import io
 import json
+import os
 import re
+import time
 import traceback
 import urllib.error
 import urllib.request
@@ -784,6 +786,100 @@ def _ui_result(prompt_text: str, raw_text: str):
     return {"ui": {"text": [prompt_text]}, "result": (prompt_text, raw_text)}
 
 
+# ------------------------------------------------------------ offline fallback
+# A workflow queued while the LLM is down used to hand "[LLM ERROR] ..." to the
+# image model as its prompt. What to send instead is the user's call: the last
+# prompt this node wrote, the user_prompt as typed (right when it already IS a
+# prompt the LLM only polishes), or nothing at all.
+OFFLINE_MODES = ["reuse last prompt", "pass user_prompt through",
+                 "stop with an error"]
+
+# Kept on disk: the LLM being off is exactly what a ComfyUI restart looks like,
+# and a memory that dies with the process would be empty right when it is needed.
+_LAST_PROMPTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "last_prompts.json")
+_LAST_PROMPTS = None
+# Nodes whose last output was a stand-in. IS_CHANGED re-runs them whatever the
+# seed, so a fixed seed does not keep serving the stand-in once the LLM is back.
+_DEGRADED = set()
+
+
+def _last_prompts() -> dict:
+    global _LAST_PROMPTS
+    if _LAST_PROMPTS is None:
+        try:
+            with open(_LAST_PROMPTS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            _LAST_PROMPTS = data if isinstance(data, dict) else {}
+        except Exception:
+            _LAST_PROMPTS = {}
+    return _LAST_PROMPTS
+
+
+def _prompt_key(unique_id, target_model) -> str:
+    """Per node AND per card: a music card's lyrics must never stand in for an
+    image prompt when the same node is switched from one to the other."""
+    return "%s|%s" % (unique_id if unique_id is not None else "_default", target_model)
+
+
+def _remember_prompt(key: str, prompt: str):
+    store = _last_prompts()
+    store[key] = {"prompt": prompt, "time": time.strftime("%Y-%m-%d %H:%M")}
+    tmp = _LAST_PROMPTS_FILE + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(store, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, _LAST_PROMPTS_FILE)
+    except Exception as e:
+        print("[LLMPromptStudio] could not save the last prompt:", e)
+
+
+def _server_reachable(base_url: str, api_key: str, timeout: float = 5):
+    """(True, "") when something answers at base_url, else (False, why).
+
+    Any HTTP answer counts, a 401 or a 404 included: the server is there, and
+    what is wrong with the request is for the normal error path to report.
+    Only a connection that cannot be made - refused, no route, timed out - is
+    the server being off.
+    """
+    req = urllib.request.Request(_endpoint(base_url, "/models"), method="GET")
+    if api_key and api_key.strip():
+        req.add_header("Authorization", "Bearer " + api_key.strip())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout):
+            return True, ""
+    except urllib.error.HTTPError:
+        return True, ""
+    except Exception as e:
+        return False, str(getattr(e, "reason", e) or e)
+
+
+def _offline_result(mode: str, key: str, unique_id, user_prompt: str,
+                    base_url: str, why: str):
+    """What the node returns when the LLM cannot be reached (see OFFLINE_MODES)."""
+    _DEGRADED.add(str(unique_id))
+    head = "[LLM OFFLINE] %s is unreachable (%s)" % (base_url, why)
+    if mode.startswith("stop"):
+        raise RuntimeError(head)
+    if mode.startswith("pass"):
+        prompt, note = user_prompt, "user_prompt passed through unchanged"
+    else:
+        saved = _last_prompts().get(key)
+        if not saved or not saved.get("prompt"):
+            raise RuntimeError(head + "\nThis node has no earlier prompt for this "
+                               "target model to reuse yet: run it once with the "
+                               "LLM up, or set on_llm_offline to pass the "
+                               "user_prompt through.")
+        prompt = saved["prompt"]
+        note = "reused the last prompt (%s)" % saved.get("time", "?")
+    msg = "%s - %s" % (head, note)
+    print(msg)
+    # The preview carries the warning; the prompt output stays clean.
+    return {"ui": {"text": ["⚠ LLM OFFLINE - %s\n\n%s" % (note, prompt)],
+                   "llm_offline": [msg]},
+            "result": (prompt, msg)}
+
+
 def _target_size(width: int, height: int, size_mode: str):
     """Return the (w, h) the image should be resized to, or None to keep it.
 
@@ -1324,6 +1420,15 @@ class LLMPromptStudio:
                        "sends one request at a time, so 1 divides the reservation "
                        "by whatever LM Studio had picked - by 4, with its usual "
                        "default. Works on its own or next to context_length."})
+        optional["on_llm_offline"] = (OFFLINE_MODES, {"default": OFFLINE_MODES[0],
+            "tooltip": "What the node sends on when the LLM server cannot be "
+                       "reached, instead of an error text the image model would "
+                       "take for a prompt. 'reuse last prompt': the last prompt "
+                       "this node wrote for this target model (kept on disk, so it "
+                       "survives a restart). 'pass user_prompt through': your text "
+                       "as typed - for when it already is a prompt. 'stop with an "
+                       "error': the run stops. Either way the dot on the title "
+                       "turns red and the preview says what was sent."})
         # Last: the picture sockets the front-end adds beyond the advertised
         # pool are resolved by this dict, not by the block above.
         spec["optional"] = _PictureSlots(spec["optional"])
@@ -1331,7 +1436,10 @@ class LLMPromptStudio:
 
     # Always re-run when the seed changes (control_after_generate); fixed seed = cached.
     @classmethod
-    def IS_CHANGED(cls, seed=0, **kwargs):
+    def IS_CHANGED(cls, seed=0, unique_id=None, **kwargs):
+        # NaN never equals itself: a node that last sent a stand-in runs again.
+        if str(unique_id) in _DEGRADED:
+            return float("nan")
         return seed
 
     # ------------------------------------------------------------------ main
@@ -1346,7 +1454,16 @@ class LLMPromptStudio:
                  video_frame_size=VIDEO_FRAME_SIZES[0], video_fps=0.0,
                  video_role=VIDEO_ROLES[0], enable_min_p=True,
                  enable_repeat_penalty=True, unload_after=False,
-                 context_length=0, context_slots=0, **pictures):
+                 context_length=0, context_slots=0,
+                 on_llm_offline=OFFLINE_MODES[0], **pictures):
+
+        # 0) is anybody there? Checked first, before any picture is encoded or
+        #    any lookup spends its own timeout on a server that is off.
+        last_key = _prompt_key(unique_id, target_model)
+        up, why = _server_reachable(base_url, api_key)
+        if not up:
+            return _offline_result(on_llm_offline, last_key, unique_id,
+                                   user_prompt, base_url, why)
 
         # 1) encode the connected images first: how many there are is a fact the
         #    system prompt has to state, otherwise the model reads <Picture 3> in
@@ -1511,6 +1628,13 @@ class LLMPromptStudio:
                 print(err)
                 return _ui_result(err, err)
         except Exception as e:
+            # Gone in the middle of the run? A timeout on a server that still
+            # answers is a slow generation, not an offline one, and stays an
+            # error - so the server is asked again rather than guessed from e.
+            up, why = _server_reachable(base_url, api_key)
+            if not up:
+                return _offline_result(on_llm_offline, last_key, unique_id,
+                                       user_prompt, base_url, why)
             msg = "[LLM ERROR] %s\nURL: %s\n%s" % (e, url, traceback.format_exc())
             print(msg)
             return _ui_result(msg, msg)
@@ -1552,6 +1676,10 @@ class LLMPromptStudio:
                    % why)
             print(msg)
             return _ui_result(msg, raw or reasoning or json.dumps(result)[:2000])
+
+        # 8bis) a real prompt: it is what a later offline run falls back on.
+        _remember_prompt(last_key, cleaned)
+        _DEGRADED.discard(str(unique_id))
 
         # 9) update history (store text turns only)
         if keep_history:

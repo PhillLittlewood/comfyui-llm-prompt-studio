@@ -20,3 +20,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Last prompt of each node, kept for when the LLM is offline
+last_prompts.json
+last_prompts.json.tmp

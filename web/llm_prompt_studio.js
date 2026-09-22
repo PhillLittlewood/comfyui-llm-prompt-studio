@@ -174,6 +174,61 @@ async function detectModel(node, select = false) {
     app.graph.setDirtyCanvas(true, true);
 }
 
+// ------------------------------------------------------------- server status
+// A dot on the title: green = the LLM answers at base_url, red = it does not,
+// grey = not asked yet. Polled, so it turns red BEFORE a run, not only after
+// one - and a run that had to fall back sets it too (onExecuted below).
+const STATUS_EVERY_MS = 10000;
+const DOT_COLORS = { true: "#3ddc84", false: "#ff4d4d", undefined: "#888888" };
+// One request per address and per round, however many nodes point at it.
+const statusCache = new Map();
+
+function serverStatus(base, key, force = false) {
+    const id = base + "\n" + key;
+    const hit = statusCache.get(id);
+    if (!force && hit && Date.now() - hit.at < STATUS_EVERY_MS - 500) return hit.promise;
+    const url =
+        "/llm_prompt_studio/status?base_url=" +
+        encodeURIComponent(base) +
+        "&api_key=" +
+        encodeURIComponent(key);
+    const promise = api
+        .fetchApi(url)
+        .then((r) => r.json())
+        .then((d) => !!d.online)
+        .catch(() => undefined); // ComfyUI itself unreachable: say nothing
+    statusCache.set(id, { at: Date.now(), promise });
+    return promise;
+}
+
+async function refreshStatus(node, force = false) {
+    const base = getWidget(node, "base_url")?.value || "http://localhost:1234/v1";
+    const key = getWidget(node, "api_key")?.value || "";
+    const online = await serverStatus(base, key, force);
+    if (online === node._llmOnline) return;
+    node._llmOnline = online;
+    app.graph?.setDirtyCanvas(true, false);
+}
+
+let statusTimer = null;
+function startStatusPolling() {
+    if (statusTimer) return;
+    statusTimer = setInterval(() => {
+        if (document.visibilityState !== "visible") return;
+        for (const node of app.graph?._nodes || []) {
+            if ((node.comfyClass || node.type) === NODE_NAME) refreshStatus(node);
+        }
+    }, STATUS_EVERY_MS);
+}
+
+function toast(severity, summary, detail) {
+    try {
+        app.extensionManager.toast.add({ severity, summary, detail, life: 8000 });
+    } catch (e) {
+        console.warn("[coco]", summary, detail);
+    }
+}
+
 // ------------------------------------------------------------- resizable boxes
 // ComfyUI pins .comfy-multiline-input to `resize: none` AND recomputes the
 // textarea height from the widget layout on every redraw, so showing the
@@ -386,6 +441,7 @@ function syncPictureSlots(node) {
 app.registerExtension({
     name: "comfy.LLMPromptStudio",
     async setup() {
+        startStatusPolling();
         await loadTemplates();
     },
     async beforeRegisterNodeDef(nodeType, nodeData) {
@@ -460,6 +516,7 @@ app.registerExtension({
                 w.callback = function () {
                     const r = orig?.apply(this, arguments);
                     detectModel(node);
+                    refreshStatus(node, true);
                     return r;
                 };
             }
@@ -510,6 +567,7 @@ app.registerExtension({
                 // Same reason: a workflow using image_6 must have its wires
                 // restored before the empty sockets around them are trimmed.
                 syncPictureSlots(node);
+                refreshStatus(node);
             }, 250);
 
             return ret;
@@ -540,11 +598,39 @@ app.registerExtension({
             return r;
         };
 
+        // The status dot, right end of the title bar.
+        const onDrawForeground = nodeType.prototype.onDrawForeground;
+        nodeType.prototype.onDrawForeground = function (ctx) {
+            const r = onDrawForeground?.apply(this, arguments);
+            if (this.flags?.collapsed) return r;
+            const h = globalThis.LiteGraph?.NODE_TITLE_HEIGHT || 30;
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(this.size[0] - h / 2, -h / 2, 5, 0, Math.PI * 2);
+            ctx.fillStyle = DOT_COLORS[this._llmOnline];
+            ctx.fill();
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
+            ctx.stroke();
+            ctx.restore();
+            return r;
+        };
+
         // Show the generated prompt (cleaned, no thinking) on the node itself.
         const onExecuted = nodeType.prototype.onExecuted;
         nodeType.prototype.onExecuted = function (message) {
             onExecuted?.apply(this, arguments);
             const node = this;
+            // A stand-in went down the graph instead of a fresh prompt: say so
+            // where it cannot be missed, the preview alone is easy to overlook.
+            const offline = message?.llm_offline;
+            if (offline) {
+                node._llmOnline = false;
+                toast("warn", "LLM offline",
+                      Array.isArray(offline) ? offline.join("") : String(offline));
+            } else if (message?.text !== undefined) {
+                node._llmOnline = true;
+            }
             const text = message?.text;
             if (text === undefined || text === null) return;
             const value = Array.isArray(text) ? text.join("") : String(text);
