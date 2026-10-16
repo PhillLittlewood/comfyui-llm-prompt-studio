@@ -9,7 +9,8 @@ It ships with editable, ready-to-use prompt "cards" for:
 **Qwen-Image 2.1** (two cards: *text to image* and *edit / i2i*),
 **FLUX.2 Klein (9B)**,
 **Krea 2 (Krea AI)**, **Ideogram**, **LTX-2 / LTX 2.3**, **Wan 2.2**,
-**MiniMax H3 / Hailuo 3** (three cards: *normal*, *ref* and *edit*),
+**MiniMax H3 / Hailuo 3** (one card per base task — *text to video*, *first
+frame*, *first and last frame*, *last frame* — plus *normal*, *ref* and *edit*),
 **ACE-Step 1.5 XL** and **YuE2** (a *style* card and a *lyrics* card each, to
 wire into the music model's two separate inputs), plus a generic preset.
 
@@ -591,8 +592,12 @@ servers whose model names don't contain "deepseek".
 
 ## How prompts were tuned (sources)
 
-- Anima base v1 — CircleStone Labs / Comfy Org docs & Civitai (hybrid tags +
-  natural language, `@artist`, `score_X`).
+- Anima base v1 — the official model card
+  ([circlestone-labs/Anima](https://huggingface.co/circlestone-labs/Anima)):
+  hybrid tags + natural language, the recommended prefix `masterpiece, best
+  quality, score_7, safe`, `@artist`, weights stronger than SDXL (`(chibi:2)`),
+  no `score_*` tag at all on Anima-Aesthetic, and one sentence per character
+  when there are several.
 - Illustrious-XL — Danbooru-tag conventions, `masterpiece, best quality`,
   **no** Pony `score_9` tags.
 - SDXL — natural language + light tags, SDXL-safe weights, `BREAK`.
@@ -664,7 +669,11 @@ servers whose model names don't contain "deepseek".
 
   | Card | What it writes | Use it for |
   |------|----------------|------------|
-  | **normal** | the base format: an optional task instruction line (**T2VA** none · **I2VA** first frame · **FL2VA** first+last · **L2VA** last frame, each verbatim from the guide), a blank line, then `integrated_multimodal_description:` → `overall_soundscape:` → `non_diegetic_music:` | the everyday case — text-to-video, and image-to-video where the pictures are frames |
+  | **text to video (T2VA)** | the base format with no instruction line: `integrated_multimodal_description:` → `overall_soundscape:` → `non_diegetic_music:` | a video from text alone |
+  | **first frame (I2VA)** | the I2VA instruction line, then the same three fields, written **forward from the picture**: first-frame anchor → action onset → development → result | the picture is the video's first frame |
+  | **first and last frame (FL2VA)** | the FL2VA instruction line, then the **path between the two pictures**, in a single shot unless you ask for cuts | picture 1 opens the video, picture 2 ends it |
+  | **last frame (L2VA)** | the L2VA instruction line, then a plausible earlier state that **converges on the picture** in the final shot | the picture is the video's last frame |
+  | **normal** | the four tasks above in one card, the task picked from the pictures; it only knows each task's first line, not how the guide says to write it | kept for workflows saved with it — prefer the card of your task |
   | **ref** | the full-reference format: `subject_definitions` → `summary` (prefixed with its bracketed task types) → `retention_analysis` (`fully_preserved` / `attribute_transfer` / `fully_copy`…) → `detailed_description` (350–500 words, style stated **before** `[Shot 1]`) → `overall_soundscape` → `non_diegetic_music` | building from **image** reference assets: reuse a character, a costume, a style, or an audio track |
   | **edit** | the same six sections, but centred on `retention_analysis` and deliberately shorter | anything that **starts from an existing video**: editing it, continuing it, swapping its character or its setting, following its camera work |
 

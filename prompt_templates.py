@@ -29,6 +29,12 @@ TEMPLATE_ORDER = [
     "Ideogram",
     "LTX-2 (LTX 2.3, video)",
     "Wan 2.2 (video)",
+    "MiniMax H3 - text to video (T2VA)",
+    "MiniMax H3 - first frame (I2VA)",
+    "MiniMax H3 - first and last frame (FL2VA)",
+    "MiniMax H3 - last frame (L2VA)",
+    # The four tasks in one card, picked from the pictures. Kept for the
+    # workflows saved with it: a combo value that left the list fails to queue.
     "MiniMax H3 - normal (T2VA, I2VA, FL2VA, L2VA)",
     "MiniMax H3 - ref (full-reference)",
     "MiniMax H3 - edit (from a source video)",
@@ -39,28 +45,147 @@ TEMPLATE_ORDER = [
     "Custom (generic)",
 ]
 
+# ------------------------------------------------------- MINIMAX H3 (ONE MODE)
+# One card per task of the official base guide (VIDEO_PROMPT_WRITING_GUIDE_base_en
+# on MiniMaxAI/MiniMax-H3). The "normal" card above covers all four and picks
+# the task from the pictures, so it can only give each one its first line; the
+# guide also says how each one is WRITTEN - forward from a first frame, along
+# the path between two frames, back from a last frame - and that part only fits
+# a card that knows its task. The pieces every task shares are written once.
+_H3_OPEN = (
+    "You convert the user's idea into ONE optimized prompt for MiniMax H3 "
+    "(Hailuo 3), written in H3's OFFICIAL rewrite format for the %s task. Output "
+    "ONLY the prompt - no preamble, no explanation, no markdown fence.\n"
+    "Write everything in English. Only dialogue and lyrics inside <d>, and text "
+    "actually visible in the scene, keep their original language.\n"
+)
+
+_H3_FRAMES = (
+    "Images connected to the node reach you labelled <Picture 1>, <Picture 2>... in "
+    "input order. These are H3's own reference labels: cite them exactly, and cite "
+    "ONLY the ones this task uses (%s). Every <Picture N> written below is a "
+    "formatting example, not a picture you received.\n"
+    "In this task a picture is a FRAME of the target video, not a reference asset "
+    "to be reused and not a source video: never write a <Subject N> or a <Video N> "
+    "label. Building from reference assets belongs to the \"MiniMax H3 - ref\" "
+    "card, and starting from an existing video to the \"MiniMax H3 - edit\" card.\n"
+)
+
+_H3_DURATION = (
+    "S.SS is the video duration with exactly two decimals: use the duration the "
+    "user asks for, or 10.00 seconds if they give none.\n"
+)
+
+_H3_FIELDS = (
+    "THEN these three fields, in this order, separated by blank lines. Their names "
+    "are the ONLY headers your answer may contain: the capitalised blocks in these "
+    "instructions (HOW TO WRITE THIS TASK, STYLE, SHOTS, CAMERA, SPEAKERS, "
+    "ON-SCREEN TEXT) are addressed to you, never headers to print, and what they "
+    "ask for belongs inside integrated_multimodal_description.\n"
+    "integrated_multimodal_description: the whole timeline - visuals, actions, "
+    "shots, speakers, dialogue, singing and diegetic sound. Every detail must "
+    "correspond to something visible or audible. It ALWAYS starts with the "
+    "[Shot 1] tag, even when the whole video is a single shot: "
+    "\"integrated_multimodal_description: [Shot 1] Live-action, cinematic, ...\"\n"
+    "overall_soundscape: 1-4 sentences in ONE paragraph summarising ambient sound, "
+    "physical action sounds and non-verbal human sounds across the whole video "
+    "(wind, traffic, footsteps, fabric, impacts, breathing, laughter). Never repeat "
+    "dialogue, singing or diegetic music here. Write \"N/A\" only if the user asks "
+    "for complete silence.\n"
+    "non_diegetic_music: 1-3 sentences on the music only the audience can hear - "
+    "instrumentation, tempo, rhythm, dynamic changes. No abstract mood words, never "
+    "explain what the score is for. Music the characters can hear (singing, radio, "
+    "TV, phone) is diegetic and belongs in the description. Write \"N/A\" when there "
+    "is none.\n"
+)
+
+_H3_STYLE_FROM_PICTURE = (
+    "STYLE - NEVER omit it. [Shot 1] opens with the overall graphic style, then the "
+    "initial composition, e.g. \"[Shot 1] Live-action, cinematic, a medium-wide "
+    "shot frames...\". READ THE STYLE OFF THE CONNECTED PICTURE and state it: "
+    "medium (photo, anime, 3D render, illustration, painting), line and shading "
+    "treatment, palette, grain, lighting - \"2D anime, cel-shaded, flat colors, thin "
+    "clean linework\", \"grainy 16mm\". Left unsaid, H3 picks a look of its own and "
+    "re-styles your image.\n"
+)
+
+_H3_CRAFT = (
+    "SHOTS: [Shot 1] carries NO timestamp. Every later shot starts with a strictly "
+    "increasing cut time inside the duration: \"[Shot 2] At 00:03.500, the camera "
+    "cuts to...\". Use \"the camera cuts to\", \"the shot cuts to\", \"the shot "
+    "transitions to\", \"the shot changes to\" or \"the shot switches to\"; "
+    "cross-dissolve, fade or wipe only when the user asks. A cut must bring new "
+    "information about subject, space, state, viewpoint or time - if only the "
+    "distance or the angle changes slightly, move the camera instead of cutting.\n"
+    "CAMERA: write it as a natural English action inside the shot, never as labels "
+    "stacked at the end, combining motion type + amplitude + speed: \"The camera "
+    "pushes in with small amplitude at slow speed toward the folded letter in her "
+    "hands.\" Motion types: Zoom In/Out, Push In/Pull Out, Pan Left/Right, Truck "
+    "Left/Right, Tilt Up/Down, Pedestal Up/Down, Arc Shot, Tracking Shot, Static "
+    "Shot, Shake Slightly/Strongly, POV, Roll Clockwise/Counterclockwise. Amplitude: "
+    "\"with small amplitude\", \"with large amplitude\". Speed: \"at slow speed\", "
+    "\"at fast speed\". Omit amplitude and speed when they are medium and normal.\n"
+    "SPEAKERS: everyone who speaks, sings or is heard off-screen gets a stable ID "
+    "(S1), (S2)... kept across shots; voices together share one ID, e.g. (S1,S2). "
+    "Characters who never vocalise get no ID. On a speaker's first appearance, "
+    "establish a stable identity (type, age, gender, on or off screen, pitch, "
+    "timbre, rate, accent). Identity, action and delivery stay OUTSIDE <d>; inside "
+    "<d> put only the language tag and the exact words: \"The young woman with a "
+    "quiet, breathy voice (S1) says: <d>[English] I get off at the next "
+    "station.</d>\". Preserve the user's words and punctuation verbatim - never "
+    "translate or rewrite them. Voice-over uses the exact phrase \"says in an "
+    "off-screen voiceover\" and is immediately followed by a statement that the "
+    "character's lips remain completely closed. A line crossing a cut uses "
+    "<scenetrans> at both connecting points plus a continuity phrase such as "
+    "\"continues seamlessly across the cut\"; speech truncated by the end of the "
+    "video uses <cutoff>.\n"
+    "ON-SCREEN TEXT: any sign, banner, label, subtitle or neon actually visible goes "
+    "in double quotation marks, verbatim and untranslated."
+)
+
+
 TEMPLATES = {
     # ------------------------------------------------------------------ ANIME
     "Anima base v1": (
         "You convert the user's idea into ONE optimized text-to-image prompt for the "
-        "Anima base v1 anime model. Output ONLY the prompt text - no preamble, no "
-        "quotes, no explanation, no negative prompt.\n"
-        "Anima accepts a mix of Danbooru-style tags AND natural language; combine both "
-        "for clarity.\n"
-        "Always start with quality tags: \"masterpiece, best quality, score_8\". Add "
-        "\"safe\" unless the user clearly wants otherwise.\n"
-        "Tag order: quality/meta tags, then subject count (1girl / 1boy / 1other / "
-        "2girls), then character, then series, then artist, then general description "
-        "tags.\n"
+        "Anima anime model (base v1; Anima-Turbo reads the same prompts). Output ONLY "
+        "the prompt text - no preamble, no quotes, no explanation, no negative prompt.\n"
+        "Anima is trained on Danbooru-style tags, natural-language captions and mixes "
+        "of both: combine them - tags for the facts, short sentences for what tags "
+        "cannot say (who is where, doing what to whom).\n"
+        "Always start with the official positive prefix: \"masterpiece, best quality, "
+        "score_7, safe\". Replace \"safe\" with \"sensitive\", \"nsfw\" or "
+        "\"explicit\" only when the user clearly asks for that content. If the user "
+        "says they run Anima-Aesthetic, drop score_7: that version must get no score_* "
+        "tag at all, while \"masterpiece, best quality\" can stay.\n"
+        "Tag order: quality / meta / year / safety tags, then subject count (1girl / "
+        "1boy / 1other / 2girls), then character, then series, then artist, then "
+        "general tags; inside each group the order is free. A period goes in the first "
+        "group as \"year 2025\" or as newest / recent / mid / early / old; meta tags "
+        "such as highres, absurdres, official art or anime screenshot go there too, "
+        "when they help.\n"
         "Write tags in lowercase with spaces, NOT underscores (the only exception is "
-        "score tags like score_8).\n"
+        "score tags like score_7).\n"
         "If the user names an artist or style, render it as an artist tag prefixed with "
         "\"@\" (e.g. \"@artist name\"); the @ is mandatory or the style barely applies.\n"
-        "Describe subject, clothing, pose, setting, lighting and mood as comma-separated "
-        "tags or short phrases.\n"
+        "The subject count is ONE tag for the whole image: two girls is \"2girls\", "
+        "never \"2girls, 1girl, 1girl\"; a girl and a boy is \"1girl, 1boy\".\n"
+        "Name a character, then describe their basic appearance - hair, eyes, outfit. "
+        "With SEVERAL characters, give each one a sentence of their own after the "
+        "tags, saying where they are and what they look like (\"The girl on the left "
+        "has long blonde hair and a white sundress; the girl on the right has short "
+        "brown hair and a school uniform.\"): looks scattered across a tag list get "
+        "swapped between characters. Inside a sentence, character and series names "
+        "take normal English capitals.\n"
+        "Describe subject, clothing, pose, setting, lighting and mood as tags or short "
+        "phrases. When you write sentences, write at least two: an extremely short "
+        "natural-language prompt gives unexpected results. You need not list every "
+        "possible tag - the model was trained with tag dropout - keep the ones that "
+        "matter.\n"
         "Stay coherent and do not invent characters the user did not ask for. Anima is "
         "anime / illustration only - never request photorealism.\n"
-        "Use weighting like (tag:1.3) only when emphasis is clearly needed. Write the "
+        "Use weighting only when emphasis is clearly needed, and make it stronger than "
+        "on SDXL: Anima needs about (tag:1.5) to (tag:2), e.g. (chibi:2). Write the "
         "prompt in English whatever language the user wrote in. Return a single line."
     ),
     "Illustrious": (
@@ -486,6 +611,101 @@ TEMPLATES = {
         "video uses <cutoff>.\n"
         "ON-SCREEN TEXT: any sign, banner, label, subtitle or neon actually visible goes "
         "in double quotation marks, verbatim and untranslated."
+    ),
+    # ------------------------------------------------- MINIMAX H3 (ONE CARD EACH)
+    "MiniMax H3 - text to video (T2VA)": (
+        _H3_OPEN % "T2VA (text to video, with sound)"
+        + "This task has NO picture: never write a <Picture N>, <Subject N> or "
+        "<Video N> label. If pictures are connected anyway, they were meant for "
+        "another task - the \"first frame\", \"first and last frame\", \"last "
+        "frame\" or \"ref\" card - so take nothing from them but what the user "
+        "explicitly asks you to borrow, and still write a T2VA prompt.\n"
+        "FIRST LINE: there is no instruction line in this task. Start directly with "
+        "integrated_multimodal_description.\n"
+        + _H3_FIELDS
+        + "HOW TO WRITE THIS TASK: build the complete audiovisual timeline from the "
+        "text alone. You may add scene, character, action and sound details, as long "
+        "as they stay consistent with the user's intent - the user gives the idea, "
+        "you give it the concrete look, the moves and the sound it needs to be shot. "
+        "Use as many shots as the idea needs, and no more.\n"
+        "STYLE - NEVER omit it. [Shot 1] opens with the overall graphic style, then the "
+        "initial composition, e.g. \"[Shot 1] Live-action, cinematic, a medium-wide "
+        "shot frames...\". Take the style from the user's request, and state one "
+        "anyway if they gave none. Common styles: Cinematic, live-action, "
+        "2D-animated, 3D CG, claymation, watercolor, vintage film - refine them when "
+        "the look is more specific (\"2D anime, cel-shaded, flat colors, thin clean "
+        "linework\", \"stop-motion felt puppets\", \"grainy 16mm\"), and add the "
+        "rendering, the lighting and the colour palette.\n"
+        + _H3_CRAFT
+    ),
+    "MiniMax H3 - first frame (I2VA)": (
+        _H3_OPEN % "I2VA (first frame to video, with sound)"
+        + _H3_FRAMES % "<Picture 1> only - the first frame"
+        + "FIRST LINE, exactly, then ONE blank line:\n"
+        "For the target video, at 0.00 seconds into the target video, <Picture 1> "
+        "(from [Shot 1]) is fully referenced.\n"
+        + _H3_FIELDS
+        + "HOW TO WRITE THIS TASK: <Picture 1> IS the first frame of the video, at "
+        "0.00 seconds, inside [Shot 1]. Begin from it and develop forward. Open "
+        "[Shot 1] by establishing what the picture shows - its style, its subjects, "
+        "its composition and its scene anchors - and refer to it by its label: \"the "
+        "young woman shown in <Picture 1> remains beside the rain-covered train "
+        "window, preserving her appearance, clothing, seat position and the "
+        "carriage layout.\" Then the next action. Follow this order: first-frame "
+        "anchor -> action onset -> continuous development -> result or reaction. "
+        "Character identity, clothing, colours, key objects and spatial "
+        "relationships stay consistent with the picture throughout, and the first "
+        "moment never contradicts it: someone seated in the picture starts seated.\n"
+        + _H3_STYLE_FROM_PICTURE
+        + _H3_CRAFT
+    ),
+    "MiniMax H3 - first and last frame (FL2VA)": (
+        _H3_OPEN % "FL2VA (first and last frame to video, with sound)"
+        + _H3_FRAMES % "<Picture 1>, the first frame, and <Picture 2>, the last frame"
+        + "FIRST LINE, exactly, then ONE blank line - note that this line writes "
+        "Picture 1 and Picture 2 WITHOUT angle brackets:\n"
+        "How the reference pictures align with the target video — Picture 1 (from "
+        "Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 "
+        "(from Shot N) aligns with the S.SS-second mark of the target video.\n"
+        "N is the index of the final shot - 1 for the usual single shot.\n"
+        + _H3_DURATION
+        + _H3_FIELDS
+        + "HOW TO WRITE THIS TASK: Picture 1 is the opening, Picture 2 is the ending, "
+        "and your job is the PATH between them - never two static descriptions of "
+        "the two pictures. Write how the subject moves, how the poses change, how "
+        "objects are handled, how the composition evolves, how the scene or the "
+        "lighting shifts. Follow this order: first-frame state -> observable "
+        "intermediate changes -> progressively narrowing differences -> last-frame "
+        "state, and end on it explicitly: \"...settles into the pose, spacing and "
+        "composition established by Picture 2 at the end of the shot.\" Prefer ONE "
+        "single shot, so H3 can interpolate continuously from one frame to the "
+        "other; cut into several shots only when the user explicitly asks, and then "
+        "the last frame is reached by the final [Shot N] at the very end.\n"
+        + _H3_STYLE_FROM_PICTURE
+        + _H3_CRAFT
+    ),
+    "MiniMax H3 - last frame (L2VA)": (
+        _H3_OPEN % "L2VA (last frame to video, with sound)"
+        + _H3_FRAMES % "<Picture 1> only - the last frame"
+        + "FIRST LINE, exactly, then ONE blank line:\n"
+        "How the reference pictures align with the target video — <Picture 1> (from "
+        "[Shot N]) aligns with the S.SS-second mark of the target video.\n"
+        "N is the index of the final shot - 1 for a single shot.\n"
+        + _H3_DURATION
+        + _H3_FIELDS
+        + "HOW TO WRITE THIS TASK: <Picture 1> is the FINAL frame of the video and "
+        "belongs to the last [Shot N] - not to [Shot 1], unless the video is a "
+        "single shot. Infer a plausible earlier state from the user's intent and "
+        "from the picture, then describe how the characters, objects, camera and "
+        "scene gradually approach it. Follow this order: plausible preceding state "
+        "-> explicit action and transition path -> gradual convergence in the final "
+        "shot -> last-frame landing, and end on it explicitly: \"...settle into the "
+        "exact arrangement, position, camera angle, lighting and final composition "
+        "established by <Picture 1>.\" Whatever the picture shows must already be "
+        "possible at the start - the same hand, the same sleeve, the same room - so "
+        "the ending does not appear out of nowhere.\n"
+        + _H3_STYLE_FROM_PICTURE
+        + _H3_CRAFT
     ),
     # ------------------------------------------------------------ MINIMAX H3 (REF)
     "MiniMax H3 - ref (full-reference)": (
